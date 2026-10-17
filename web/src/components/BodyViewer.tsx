@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { detectBodyType } from '../lib/detectBodyType'
+import { copyToClipboard } from '../lib/clipboard'
 import { HL } from '../lib/highlight'
 import { hexDump } from '../lib/hexdump'
 import type { BodyView } from '../api'
@@ -13,6 +14,29 @@ export default function BodyViewer({ view, contentType, id, part }:
   { view: BodyView; contentType?: string; id: number; part: BodyPart }) {
   const t = detectBodyType(contentType, view.text ?? '', view.binary)
   const [tab, setTab] = useState<'formatted' | 'raw'>('formatted')
+
+  // Copy affordance (FR-026a): Clipboard API first, execCommand fallback;
+  // the label flips briefly (Copied! / Copy failed) on click.
+  const [copied, setCopied] = useState<'body-ok' | 'body-err' | null>(null)
+  const copyText = view.text ?? (view.hex_preview ? hexDump(view.hex_preview) : '')
+  const copyNow = async () => {
+    try {
+      await copyToClipboard(copyText)
+      setCopied('body-ok')
+    } catch {
+      setCopied('body-err')
+    }
+    setTimeout(() => setCopied(c => (c === 'body-ok' || c === 'body-err' ? null : c)), 1500)
+  }
+  const btnCls = 'border border-[var(--border)] rounded px-2 py-1 text-xs bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer'
+  const copyGroup = (
+    <div className="flex flex-col items-start gap-1 shrink-0">
+      <span className="muted text-xs">Copy as:</span>
+      <button type="button" onClick={copyNow} disabled={copyText.length === 0} className={btnCls}>
+        {copied === 'body-ok' ? 'Copied!' : copied === 'body-err' ? 'Copy failed' : 'Body'}
+      </button>
+    </div>
+  )
   const banner = (view.truncated || view.text_truncated)
     ? <div className="bg-[color-mix(in_srgb,var(--s-5xx)_15%,transparent)] text-[var(--s-5xx)] px-2.5 py-1.5 rounded mb-2">body truncated</div> : null
   const meta = (
@@ -25,7 +49,10 @@ export default function BodyViewer({ view, contentType, id, part }:
     const more = view.len > HEX_PREVIEW_BYTES || view.truncated
     return (
       <>
-        {meta}
+        <div className="flex items-start justify-between gap-4">
+          {meta}
+          {copyGroup}
+        </div>
         {banner}
         <div className="text-sm mb-1">binary · {view.len} B</div>
         <pre className="hexdump">{hexDump(view.hex_preview ?? '')}</pre>
@@ -42,7 +69,10 @@ export default function BodyViewer({ view, contentType, id, part }:
     try { pretty = JSON.stringify(JSON.parse(raw), null, 2) } catch { pretty = null }
     return (
       <>
-        {meta}
+        <div className="flex items-start justify-between gap-4">
+          {meta}
+          {copyGroup}
+        </div>
         {banner}
         {pretty === null && <div className="bg-[color-mix(in_srgb,var(--s-5xx)_15%,transparent)] text-[var(--s-5xx)] px-2.5 py-1.5 rounded mb-2">not valid JSON — showing raw</div>}
         <div className="flex gap-2 mb-2">
@@ -55,14 +85,20 @@ export default function BodyViewer({ view, contentType, id, part }:
   }
   if (t === 'xml' || t === 'html') return (
     <>
-      {meta}
+      <div className="flex items-start justify-between gap-4">
+        {meta}
+        {copyGroup}
+      </div>
       {banner}
       <HL lang="markup" code={view.text as string} />
     </>
   )
   return (
     <>
-      {meta}
+      <div className="flex items-start justify-between gap-4">
+        {meta}
+        {copyGroup}
+      </div>
       {banner}
       <pre className="whitespace-pre-wrap break-all">{view.text as string}</pre>
     </>

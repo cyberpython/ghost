@@ -1,6 +1,9 @@
-import { describe, it, expect } from 'vitest'
-import { render } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+import { render, fireEvent, waitFor } from '@testing-library/react'
 import BodyViewer from './BodyViewer'
+import { copyToClipboard } from '../lib/clipboard'
+
+vi.mock('../lib/clipboard', () => ({ copyToClipboard: vi.fn() }))
 const jb = { text: '{"a":1}', binary: false, hex_preview: null, len: 5, sha256: null, truncated: false, text_truncated: false }
 const xb = { text: '<?xml version="1.0"?><root>hi</root>', binary: false, hex_preview: null, len: 0, sha256: null, truncated: false, text_truncated: false }
 const bin = { text: null, binary: true, hex_preview: 'ff fe 00 41 42', len: 2048, sha256: null, truncated: true, text_truncated: false }
@@ -27,5 +30,28 @@ describe('BodyViewer', () => {
     const { container } = render(<BodyViewer view={{ ...jb, sha256: h }} id={1} part="request" />)
     expect(container.textContent).toContain(`sha256 ${h}`)
     expect(container.textContent).not.toContain('…')
+  })
+
+  it('copies the text body to the clipboard', async () => {
+    vi.mocked(copyToClipboard).mockResolvedValue(undefined)
+    const { getByRole, container } = render(<BodyViewer view={jb} id={1} part="response" />)
+    await fireEvent.click(getByRole('button', { name: 'Body' }))
+    await waitFor(() => expect(copyToClipboard).toHaveBeenCalledWith('{"a":1}'))
+    await waitFor(() => expect(container.textContent).toContain('Copied!'))
+  })
+
+  it('copies the hexdump representation for binary bodies', async () => {
+    vi.mocked(copyToClipboard).mockResolvedValue(undefined)
+    const { getByRole } = render(<BodyViewer view={binSmall} id={7} part="request" />)
+    await fireEvent.click(getByRole('button', { name: 'Body' }))
+    await waitFor(() =>
+      expect(copyToClipboard).toHaveBeenCalledWith(expect.stringContaining('00000000')))
+  })
+
+  it('shows Copy failed when the clipboard write throws', async () => {
+    vi.mocked(copyToClipboard).mockRejectedValue(new Error('nope'))
+    const { getByRole, container } = render(<BodyViewer view={jb} id={1} part="request" />)
+    await fireEvent.click(getByRole('button', { name: 'Body' }))
+    await waitFor(() => expect(container.textContent).toContain('Copy failed'))
   })
 })
