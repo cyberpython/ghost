@@ -1,9 +1,30 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, fireEvent, waitFor } from '@testing-library/react'
+import { render, fireEvent, waitFor, within } from '@testing-library/react'
 import BodyViewer from './BodyViewer'
 import { copyToClipboard } from '../lib/clipboard'
+import { getCapture } from '../api'
+import type { BodyView, CaptureDetail } from '../api'
 
 vi.mock('../lib/clipboard', () => ({ copyToClipboard: vi.fn() }))
+vi.mock('../api', () => ({ getCapture: vi.fn() }))
+
+const bd = (over: Partial<BodyView> = {}): BodyView => ({
+  text: null, text_truncated: false, binary: false, hex_preview: null,
+  len: 0, sha256: null, truncated: false, ...over,
+})
+const detail: CaptureDetail = {
+  id: 5, created_at: 't', total_ms: 5, client_addr: 'c',
+  request_version: 'HTTP/1.1', request_method: 'POST', request_target: '/api?a=1',
+  request_headers: [
+    { name: 'host', value: '127.0.0.1:8080' },
+    { name: 'content-length', value: '9' },
+    { name: 'content-type', value: 'application/json' },
+  ],
+  request_body: bd({ text: '{"pw":"***"}', len: 9 }),
+  upstream_scheme: 'http', upstream_authority: 'up:9000', upstream_path: '/app/api',
+  upstream_query: 'a=1', response_version: null, status_code: null,
+  response_headers: [], response_body: bd(), error: null,
+}
 const jb = { text: '{"a":1}', binary: false, hex_preview: null, len: 5, sha256: null, truncated: false, text_truncated: false }
 const xb = { text: '<?xml version="1.0"?><root>hi</root>', binary: false, hex_preview: null, len: 0, sha256: null, truncated: false, text_truncated: false }
 const bin = { text: null, binary: true, hex_preview: 'ff fe 00 41 42', len: 2048, sha256: null, truncated: true, text_truncated: false }
@@ -52,6 +73,31 @@ describe('BodyViewer', () => {
     vi.mocked(copyToClipboard).mockRejectedValue(new Error('nope'))
     const { getByRole, container } = render(<BodyViewer view={jb} id={1} part="request" />)
     await fireEvent.click(getByRole('button', { name: 'Copy Body' }))
+    await waitFor(() => expect(container.textContent).toContain('Copy failed'))
+  })
+
+  it('shows Copy cURL only on the request part', () => {
+    const req = render(<BodyViewer view={jb} id={5} part="request" />)
+    expect(within(req.container).getByRole('button', { name: 'Copy cURL' })).toBeTruthy()
+    const resp = render(<BodyViewer view={jb} id={5} part="response" />)
+    expect(within(resp.container).queryByRole('button', { name: 'Copy cURL' })).toBeNull()
+  })
+
+  it('copies the curl command built from the fetched capture', async () => {
+    vi.mocked(copyToClipboard).mockResolvedValue(undefined)
+    vi.mocked(getCapture).mockResolvedValue(detail)
+    const { getByRole } = render(<BodyViewer view={jb} id={5} part="request" />)
+    await fireEvent.click(getByRole('button', { name: 'Copy cURL' }))
+    await waitFor(() => expect(copyToClipboard).toHaveBeenCalledWith(
+      expect.stringContaining("curl -X POST 'http://127.0.0.1:8080/api?a=1'")))
+    expect(copyToClipboard).toHaveBeenCalledWith(expect.stringContaining('--data-binary'))
+    expect(copyToClipboard).not.toHaveBeenCalledWith(expect.stringContaining('content-length'))
+  })
+
+  it('shows Copy failed when fetching the capture for cURL fails', async () => {
+    vi.mocked(getCapture).mockRejectedValue(new Error('boom'))
+    const { getByRole, container } = render(<BodyViewer view={jb} id={5} part="request" />)
+    await fireEvent.click(getByRole('button', { name: 'Copy cURL' }))
     await waitFor(() => expect(container.textContent).toContain('Copy failed'))
   })
 })

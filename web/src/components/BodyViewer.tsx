@@ -4,6 +4,8 @@ import { copyToClipboard } from '../lib/clipboard'
 import { HL } from '../lib/highlight'
 import { hexDump } from '../lib/hexdump'
 import type { BodyView } from '../api'
+import { getCapture } from '../api'
+import { copyCurlCommand } from '../lib/curl'
 
 export type BodyPart = 'request' | 'response'
 
@@ -17,8 +19,12 @@ export default function BodyViewer({ view, contentType, id, part }:
 
   // Copy affordance (FR-026a): Clipboard API first, execCommand fallback;
   // the label flips briefly (Copied! / Copy failed) on click.
-  const [copied, setCopied] = useState<'body-ok' | 'body-err' | null>(null)
+  const [copied, setCopied] = useState<'body-ok' | 'body-err' | 'curl-ok' | 'curl-err' | null>(null)
   const copyText = view.text ?? (view.hex_preview ? hexDump(view.hex_preview) : '')
+  const resetLater = (k: string) =>
+    setTimeout(() => setCopied(c => (c?.startsWith(k) ? null : c)), 1500)
+  const btnLabel = (k: 'body' | 'curl', idle: string) =>
+    copied === `${k}-ok` ? 'Copied!' : copied === `${k}-err` ? 'Copy failed' : idle
   const copyNow = async () => {
     try {
       await copyToClipboard(copyText)
@@ -26,14 +32,29 @@ export default function BodyViewer({ view, contentType, id, part }:
     } catch {
       setCopied('body-err')
     }
-    setTimeout(() => setCopied(c => (c === 'body-ok' || c === 'body-err' ? null : c)), 1500)
+    resetLater('body')
+  }
+  const curlNow = async () => {
+    try {
+      const d = await getCapture(id)
+      await copyToClipboard(copyCurlCommand(d))
+      setCopied('curl-ok')
+    } catch {
+      setCopied('curl-err')
+    }
+    resetLater('curl')
   }
   const btnCls = 'border border-[var(--border)] rounded px-2 py-1 text-xs bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer'
   const copyGroup = (
     <div className="flex items-center gap-2 mb-2">
       <button type="button" onClick={copyNow} disabled={copyText.length === 0} className={btnCls}>
-        {copied === 'body-ok' ? 'Copied!' : copied === 'body-err' ? 'Copy failed' : 'Copy Body'}
+        {btnLabel('body', 'Copy Body')}
       </button>
+      {part === 'request' && (
+        <button type="button" onClick={curlNow} className={btnCls}>
+          {btnLabel('curl', 'Copy cURL')}
+        </button>
+      )}
     </div>
   )
   const banner = (view.truncated || view.text_truncated)
