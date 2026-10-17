@@ -100,4 +100,30 @@ describe('BodyViewer', () => {
     await fireEvent.click(getByRole('button', { name: 'Copy cURL' }))
     await waitFor(() => expect(container.textContent).toContain('Copy failed'))
   })
+
+  it('shows Copy Hurl only on the request part', () => {
+    const req = render(<BodyViewer view={jb} id={5} part="request" />)
+    expect(within(req.container).getByRole('button', { name: 'Copy Hurl' })).toBeTruthy()
+    const resp = render(<BodyViewer view={jb} id={5} part="response" />)
+    expect(within(resp.container).queryByRole('button', { name: 'Copy Hurl' })).toBeNull()
+  })
+
+  it('copies a hurl file with a raw-fenced body and proxy URL', async () => {
+    vi.mocked(copyToClipboard).mockResolvedValue(undefined)
+    vi.mocked(getCapture).mockResolvedValue(detail)
+    const { getByRole } = render(<BodyViewer view={jb} id={5} part="request" />)
+    await fireEvent.click(getByRole('button', { name: 'Copy Hurl' }))
+    await waitFor(() => expect(copyToClipboard).toHaveBeenCalledWith(
+      expect.stringContaining('```raw')))
+    expect(copyToClipboard).toHaveBeenCalledWith(
+      expect.stringContaining('POST http://127.0.0.1:8080/api?a=1'))
+  })
+
+  it('shows Copy failed when hurl generation/clipboard fails', async () => {
+    vi.mocked(copyToClipboard).mockRejectedValue(new Error('nope'))
+    vi.mocked(getCapture).mockResolvedValue(detail)
+    const { getByRole, container } = render(<BodyViewer view={jb} id={5} part="request" />)
+    await fireEvent.click(getByRole('button', { name: 'Copy Hurl' }))
+    await waitFor(() => expect(container.textContent).toContain('Copy failed'))
+  })
 })

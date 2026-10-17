@@ -6,6 +6,7 @@ import { hexDump } from '../lib/hexdump'
 import type { BodyView } from '../api'
 import { getCapture } from '../api'
 import { copyCurlCommand } from '../lib/curl'
+import { copyHurlFile, bytesToBase64 } from '../lib/hurl'
 
 export type BodyPart = 'request' | 'response'
 
@@ -19,11 +20,13 @@ export default function BodyViewer({ view, contentType, id, part }:
 
   // Copy affordance (FR-026a): Clipboard API first, execCommand fallback;
   // the label flips briefly (Copied! / Copy failed) on click.
-  const [copied, setCopied] = useState<'body-ok' | 'body-err' | 'curl-ok' | 'curl-err' | null>(null)
+  const [copied, setCopied] = useState<
+    'body-ok' | 'body-err' | 'curl-ok' | 'curl-err' | 'hurl-ok' | 'hurl-err' | null
+  >(null)
   const copyText = view.text ?? (view.hex_preview ? hexDump(view.hex_preview) : '')
   const resetLater = (k: string) =>
     setTimeout(() => setCopied(c => (c?.startsWith(k) ? null : c)), 1500)
-  const btnLabel = (k: 'body' | 'curl', idle: string) =>
+  const btnLabel = (k: 'body' | 'curl' | 'hurl', idle: string) =>
     copied === `${k}-ok` ? 'Copied!' : copied === `${k}-err` ? 'Copy failed' : idle
   const copyNow = async () => {
     try {
@@ -44,6 +47,22 @@ export default function BodyViewer({ view, contentType, id, part }:
     }
     resetLater('curl')
   }
+  const hurlNow = async () => {
+    try {
+      const d = await getCapture(id)
+      let b64: string | null = null
+      if (d.request_body.text === null && d.request_body.len > 0 && !d.request_body.truncated) {
+        const r = await fetch(`/api/captures/${id}/body?part=request`)
+        if (!r.ok) throw new Error('http ' + r.status)
+        b64 = bytesToBase64(new Uint8Array(await r.arrayBuffer()))
+      }
+      await copyToClipboard(copyHurlFile(d, b64))
+      setCopied('hurl-ok')
+    } catch {
+      setCopied('hurl-err')
+    }
+    resetLater('hurl')
+  }
   const btnCls = 'border border-[var(--border)] rounded px-2 py-1 text-xs bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer'
   const copyGroup = (
     <div className="flex items-center gap-2 mb-2">
@@ -51,9 +70,14 @@ export default function BodyViewer({ view, contentType, id, part }:
         {btnLabel('body', 'Copy Body')}
       </button>
       {part === 'request' && (
-        <button type="button" onClick={curlNow} className={btnCls}>
-          {btnLabel('curl', 'Copy cURL')}
-        </button>
+        <>
+          <button type="button" onClick={curlNow} className={btnCls}>
+            {btnLabel('curl', 'Copy cURL')}
+          </button>
+          <button type="button" onClick={hurlNow} className={btnCls}>
+            {btnLabel('hurl', 'Copy Hurl')}
+          </button>
+        </>
       )}
     </div>
   )
