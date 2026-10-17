@@ -166,7 +166,7 @@ cargo run --bin ghost-api -- --db captures.db --listen 127.0.0.1:8090 --static-d
 ### Tests
 
 - `cargo test` — Rust unit + e2e + API integration tests.
-- `cd web && npm test` — vitest + jsdom + @testing-library/react (15 tests).
+- `cd web && npm test` — vitest + jsdom + @testing-library/react (28 tests).
 
 ## Development
 
