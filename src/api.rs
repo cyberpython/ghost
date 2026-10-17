@@ -17,6 +17,9 @@ type R = Result<Json<Value>, StatusCode>;
 // ── CLI args ────────────────────────────────────────────────────────────────
 
 #[derive(clap::Parser)]
+#[command(about = "read-only HTTP API over a ghost captures DB, plus the static SPA (web/dist)")]
+#[command(after_help = "The captures DB is created by the proxy (`ghost --db …`); \
+ ghost-api only reads it.")]
 pub struct Args {
     #[arg(long)] pub db: String,
     #[arg(long, default_value = "127.0.0.1:8090")] pub listen: SocketAddr,
@@ -26,6 +29,14 @@ pub struct Args {
 // ── Read-only pool ──────────────────────────────────────────────────────────
 
 pub async fn open_read_only(path: &str) -> anyhow::Result<sqlx::sqlite::SqlitePool> {
+    // A read-only SQLite open can never create a missing file (SQLITE_CANTOPEN,
+    // code 14) — check up front and tell the user what to do about it.
+    if !StdPath::new(path).exists() {
+        anyhow::bail!(
+            "captures DB \"{path}\" not found — the proxy creates it; run \
+             `ghost --db {path} ...` first (then re-run ghost-api with the same --db path)"
+        );
+    }
     let opts = sqlx::sqlite::SqliteConnectOptions::new()
         .filename(path)
         .read_only(true);
