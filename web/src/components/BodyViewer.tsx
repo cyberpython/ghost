@@ -30,10 +30,9 @@ export default function BodyViewer({ view, contentType, id, part }:
   }
   const btnCls = 'border border-[var(--border)] rounded px-2 py-1 text-xs bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer'
   const copyGroup = (
-    <div className="flex flex-col items-start gap-1 shrink-0">
-      <span className="muted text-xs">Copy as:</span>
+    <div className="flex items-center gap-2 mb-2">
       <button type="button" onClick={copyNow} disabled={copyText.length === 0} className={btnCls}>
-        {copied === 'body-ok' ? 'Copied!' : copied === 'body-err' ? 'Copy failed' : 'Body'}
+        {copied === 'body-ok' ? 'Copied!' : copied === 'body-err' ? 'Copy failed' : 'Copy Body'}
       </button>
     </div>
   )
@@ -42,19 +41,22 @@ export default function BodyViewer({ view, contentType, id, part }:
   const meta = (
     <div className="muted text-sm mb-1">
       {view.len} B{view.truncated ? ' · truncated' : ''}
-      {view.sha256 ? <> · sha256 {view.sha256}</> : ''}
     </div>
   )
+  const shaLine = view.sha256 ? (
+    <div className="muted text-xs font-mono break-all mb-1" title="SHA-256 of the original on-wire body, before masking/truncation — it does not verify the stored copy when masking changed it">
+      sha256 {view.sha256}
+    </div>
+  ) : null
   if (view.binary || view.text === null) {
     const more = view.len > HEX_PREVIEW_BYTES || view.truncated
     return (
       <>
-        <div className="flex items-start justify-between gap-4">
-          {meta}
-          {copyGroup}
-        </div>
+        {meta}
+        {shaLine}
         {banner}
         <div className="text-sm mb-1">binary · {view.len} B</div>
+        {copyGroup}
         <pre className="hexdump">{hexDump(view.hex_preview ?? '')}</pre>
         {more && (
           <a className="muted text-sm mt-1 block" href={`/api/captures/${id}/body?part=${part}`}
@@ -69,12 +71,11 @@ export default function BodyViewer({ view, contentType, id, part }:
     try { pretty = JSON.stringify(JSON.parse(raw), null, 2) } catch { pretty = null }
     return (
       <>
-        <div className="flex items-start justify-between gap-4">
-          {meta}
-          {copyGroup}
-        </div>
+        {meta}
+        {shaLine}
         {banner}
         {pretty === null && <div className="bg-[color-mix(in_srgb,var(--s-5xx)_15%,transparent)] text-[var(--s-5xx)] px-2.5 py-1.5 rounded mb-2">not valid JSON — showing raw</div>}
+        {copyGroup}
         <div className="flex gap-2 mb-2">
           <button onClick={() => setTab('formatted')} className={tab === 'formatted' ? 'px-3 py-1 rounded bg-[var(--panel)] border border-[var(--border)]' : 'px-3 py-1 rounded border border-[var(--border)]'}>Formatted</button>
           <button onClick={() => setTab('raw')} className={tab === 'raw' ? 'px-3 py-1 rounded bg-[var(--panel)] border border-[var(--border)]' : 'px-3 py-1 rounded border border-[var(--border)]'}>Raw</button>
@@ -85,21 +86,19 @@ export default function BodyViewer({ view, contentType, id, part }:
   }
   if (t === 'xml' || t === 'html') return (
     <>
-      <div className="flex items-start justify-between gap-4">
-        {meta}
-        {copyGroup}
-      </div>
+      {meta}
+      {shaLine}
       {banner}
+      {copyGroup}
       <HL lang="markup" code={view.text as string} />
     </>
   )
   return (
     <>
-      <div className="flex items-start justify-between gap-4">
-        {meta}
-        {copyGroup}
-      </div>
+      {meta}
+      {shaLine}
       {banner}
+      {copyGroup}
       <pre className="whitespace-pre-wrap break-all">{view.text as string}</pre>
     </>
   )

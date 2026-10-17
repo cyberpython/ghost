@@ -19,7 +19,7 @@ export default function App(){
   return (<>
     <header className="flex items-center justify-between px-4 py-2.5">
       <div className="flex items-center gap-4">
-        <strong>ghost</strong>
+        <Link to="/" className="text-[var(--text)]"><strong>ghost</strong></Link>
         <nav><Link to="/">list</Link></nav>
       </div>
       <div className="flex items-center gap-4">

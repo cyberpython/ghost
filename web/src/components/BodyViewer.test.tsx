@@ -35,7 +35,7 @@ describe('BodyViewer', () => {
   it('copies the text body to the clipboard', async () => {
     vi.mocked(copyToClipboard).mockResolvedValue(undefined)
     const { getByRole, container } = render(<BodyViewer view={jb} id={1} part="response" />)
-    await fireEvent.click(getByRole('button', { name: 'Body' }))
+    await fireEvent.click(getByRole('button', { name: 'Copy Body' }))
     await waitFor(() => expect(copyToClipboard).toHaveBeenCalledWith('{"a":1}'))
     await waitFor(() => expect(container.textContent).toContain('Copied!'))
   })
@@ -43,7 +43,7 @@ describe('BodyViewer', () => {
   it('copies the hexdump representation for binary bodies', async () => {
     vi.mocked(copyToClipboard).mockResolvedValue(undefined)
     const { getByRole } = render(<BodyViewer view={binSmall} id={7} part="request" />)
-    await fireEvent.click(getByRole('button', { name: 'Body' }))
+    await fireEvent.click(getByRole('button', { name: 'Copy Body' }))
     await waitFor(() =>
       expect(copyToClipboard).toHaveBeenCalledWith(expect.stringContaining('00000000')))
   })
@@ -51,7 +51,7 @@ describe('BodyViewer', () => {
   it('shows Copy failed when the clipboard write throws', async () => {
     vi.mocked(copyToClipboard).mockRejectedValue(new Error('nope'))
     const { getByRole, container } = render(<BodyViewer view={jb} id={1} part="request" />)
-    await fireEvent.click(getByRole('button', { name: 'Body' }))
+    await fireEvent.click(getByRole('button', { name: 'Copy Body' }))
     await waitFor(() => expect(container.textContent).toContain('Copy failed'))
   })
 })

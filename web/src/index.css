@@ -17,10 +17,15 @@ body {
   color: var(--text);
   font: 14px/1.45 system-ui, sans-serif;
 }
+* { box-sizing: border-box; }
 
-a {
-  color: var(--accent);
-  text-decoration: none;
+/* Element defaults live in @layer base so Tailwind utilities (utilities
+   layer) can override them — unlayered rules would beat every utility. */
+@layer base {
+  a {
+    color: var(--accent);
+    text-decoration: none;
+  }
 }
 
 .muted {
