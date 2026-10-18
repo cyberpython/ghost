@@ -47,7 +47,7 @@ fn build_entry(row: &CaptureRow) -> Value {
         "blocked": -1, "dns": -1, "connect": -1, "send": -1,
         "wait": -1, "receive": -1,
     });
-    let mut entry = json!({
+    let entry = json!({
         "startedDateTime": row.created_at,
         "time": row.total_ms,
         "request": request,
