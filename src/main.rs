@@ -6,6 +6,12 @@ use std::net::SocketAddr;
 
 use ghost::{db, proxy, url_join};
 
+/// Return the next 00:00:01 local time after `now`.
+fn next_prune_time(now: chrono::DateTime<chrono::Local>) -> chrono::DateTime<chrono::Local> {
+    let tomorrow = now.date_naive() + chrono::Days::new(1);
+    tomorrow.and_hms_opt(0, 0, 1).unwrap().and_local_timezone(chrono::Local).unwrap()
+}
+
 #[derive(Parser)]
 #[command(version, about, long_about)]
 struct Args {
@@ -24,6 +30,10 @@ struct Args {
     /// Cap on body bytes retained for storage (relaying is always in full).
     #[arg(long, default_value_t = 100 * 1024 * 1024)]
     max_body_bytes: usize,
+
+    /// Prune captures older than this many days (0 = disabled).
+    #[arg(long)]
+    retention_days: Option<u64>,
 }
 
 #[tokio::main]
@@ -37,10 +47,44 @@ async fn main() -> anyhow::Result<()> {
     let pool = db::init(&args.db).await?;
     let listener = tokio::net::TcpListener::bind(args.listen).await?;
     let state = proxy::State {
-        db: pool,
+        db: pool.clone(),
         upstream,
         max_body_bytes: args.max_body_bytes,
+        retention_days: args.retention_days,
     };
+
+    // Run initial prune if retention is configured.
+    if let Some(days) = args.retention_days {
+        if days > 0 {
+            match db::prune(&pool, days).await {
+                Ok(n) => tracing::info!(pruned = n, "initial retention prune done"),
+                Err(err) => tracing::warn!(error = %err, "initial retention prune failed (proxy continues)"),
+            }
+        }
+    }
+
+    // Spawn scheduled pruning task: runs daily at 00:00:01 local time.
+    if let Some(days) = args.retention_days {
+        if days > 0 {
+            let pool_for_schedule = pool.clone();
+            tokio::spawn(async move {
+                loop {
+                    let now = chrono::Local::now();
+                    let next = next_prune_time(now);
+                    let delay = next - now;
+                    let delay = std::time::Duration::from_secs(
+                        delay.num_seconds().max(0) as u64,
+                    );
+                    tokio::time::sleep(delay).await;
+
+                    match db::prune(&pool_for_schedule, days).await {
+                        Ok(n) => tracing::info!(pruned = n, "scheduled retention prune done"),
+                        Err(err) => tracing::warn!(error = %err, "scheduled retention prune failed (proxy continues)"),
+                    }
+                }
+            });
+        }
+    }
 
     tracing::info!(
         listen = %args.listen,

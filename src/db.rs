@@ -154,3 +154,25 @@ pub async fn insert(pool: &SqlitePool, c: &Capture) -> Result<i64, sqlx::Error> 
     let res = q.execute(pool).await?;
     Ok(res.last_insert_rowid())
 }
+
+/// Delete captures whose `created_at` is older than `days` days.
+/// Returns the number of rows deleted.
+///
+/// After deletion a `wal_checkpoint(TRUNCATE)` is run to reclaim disk space.
+pub async fn prune(pool: &SqlitePool, days: u64) -> Result<u64, sqlx::Error> {
+    let cutoff = chrono::Utc::now()
+        - chrono::Duration::days(days as i64);
+    let cutoff_str = cutoff.to_rfc3339();
+
+    let result = sqlx::query("DELETE FROM captures WHERE created_at < ?1")
+        .bind(&cutoff_str)
+        .execute(pool)
+        .await?;
+
+    // Reclaim disk space after bulk deletes.
+    sqlx::raw_sql("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(pool)
+        .await?;
+
+    Ok(result.rows_affected())
+}
