@@ -27,6 +27,12 @@ export default function Detail(){
     { label: 'Response version', value: d.response_version ?? '—' },
   ]
   return (<>
+    <div className="flex justify-end mb-2">
+      <a href={`/api/export/captures/${d.id}`} download
+        className="border border-[var(--border)] rounded px-2.5 py-1 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors">
+        Export HAR
+      </a>
+    </div>
     {d.error && <div className="bg-[color-mix(in_srgb,var(--s-5xx)_15%,transparent)] text-[var(--s-5xx)] px-2.5 py-1.5 rounded mb-2">error: {d.error}</div>}
     <table className="border-collapse w-full mb-4">
       <tbody>

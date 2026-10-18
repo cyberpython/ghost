@@ -148,6 +148,18 @@ ghost-api --db captures.db --listen 127.0.0.1:8090 --static-dir web/dist
   `x-body-truncated` / `x-body-original-length` headers). No such body → `404`.
 - `GET /api/facets` — `{methods, statuses, errors}` for filter dropdowns; `errors`
   is the count of rows with an error set, not a list of kinds.
+- `GET /api/export/captures` — the current filter set as a **HAR 1.2** log
+  (same filters as the list endpoint, `limit` defaults to 50 / max 500),
+  returned as an `application/json` attachment (`captures.har`).
+- `GET /api/export/captures/{id}` — a single capture as a HAR 1.2 log
+  (`capture-{id}.har` attachment). Unknown id → `404`.
+
+  HAR is the lingua franca of HTTP tooling: the `.har` file opens directly in
+  Chrome DevTools (Network → Import HAR) and Charles. Text bodies are inlined
+  as UTF-8 `content.text`; binary bodies are base64-encoded with
+  `encoding: "base64"` so they survive the JSON round-trip byte-for-byte.
+  Failed exchanges (no HTTP status) are emitted with `status: 0` and the
+  error as `statusText`.
 
 ### Dev flow
 
