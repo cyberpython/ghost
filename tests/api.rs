@@ -468,10 +468,11 @@ async fn api_integration() {
             .unwrap()
             .contains(r#"attachment; filename="capture-1.har""#));
         let j: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(j["version"], "1.2");
-        assert_eq!(j["creator"]["name"], "ghost");
-        assert_eq!(j["entries"].as_array().unwrap().len(), 1);
-        let e = &j["entries"][0];
+        // HAR 1.2 wraps everything in a top-level `log` object.
+        assert_eq!(j["log"]["version"], "1.2");
+        assert_eq!(j["log"]["creator"]["name"], "ghost");
+        assert_eq!(j["log"]["entries"].as_array().unwrap().len(), 1);
+        let e = &j["log"]["entries"][0];
         assert_eq!(e["startedDateTime"], "2024-01-01T00:00:00Z");
         assert_eq!(e["request"]["method"], "GET");
         assert_eq!(e["request"]["url"], "http://127.0.0.1:1/app/a");
@@ -495,7 +496,7 @@ async fn api_integration() {
     {
         let (_, _, body) = get_raw(port, "/api/export/captures/3").await;
         let j: Value = serde_json::from_slice(&body).unwrap();
-        let e = &j["entries"][0];
+        let e = &j["log"]["entries"][0];
         assert_eq!(e["request"]["postData"]["text"], "//4AAQ==");
         assert_eq!(e["request"]["postData"]["encoding"], "base64");
         // Failed exchange: no status → 0, error as statusText.
@@ -515,7 +516,7 @@ async fn api_integration() {
             .unwrap()
             .contains(r#"attachment; filename="captures.har""#));
         let j: Value = serde_json::from_slice(&body).unwrap();
-        let urls: Vec<&str> = j["entries"]
+        let urls: Vec<&str> = j["log"]["entries"]
             .as_array()
             .unwrap()
             .iter()

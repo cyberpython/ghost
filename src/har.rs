@@ -11,20 +11,27 @@ use serde_json::{json, Value};
 
 use crate::api::CaptureRow;
 
-/// Build the HAR `log` object for one or more captures.
+/// Build the HAR document for one or more captures.
+///
+/// The HAR 1.2 spec wraps everything in a top-level `log` object —
+/// `{"log": {"version", "creator", "pages", "entries"}}`. Chrome DevTools
+/// and Charles reject a file that puts those fields at the top level, so
+/// the wrapper is mandatory, not cosmetic.
 ///
 /// `rows` are in the order they should appear in the HAR (the API passes
 /// them in `id DESC` order, matching the list view).
 pub fn build_log(rows: &[CaptureRow]) -> Value {
     let entries: Vec<Value> = rows.iter().map(build_entry).collect();
     json!({
-        "version": "1.2",
-        "creator": {
-            "name": "ghost",
-            "version": env!("CARGO_PKG_VERSION"),
-        },
-        "pages": [],
-        "entries": entries,
+        "log": {
+            "version": "1.2",
+            "creator": {
+                "name": "ghost",
+                "version": env!("CARGO_PKG_VERSION"),
+            },
+            "pages": [],
+            "entries": entries,
+        }
     })
 }
 
