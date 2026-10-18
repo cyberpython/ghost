@@ -28,14 +28,14 @@ The application consists of 3 parts:
 ## Usage
 
 ```
-ghost --listen 127.0.0.1:8080 --upstream http://127.0.0.1:9000/app --db ghost.db
+ghost --listen 127.0.0.1:8080 --upstream http://127.0.0.1:9000/app --db captures.db
 ```
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--listen` | `127.0.0.1:8080` | Address the proxy accepts clients on. |
 | `--upstream` | *(required)* | Fixed upstream base: `http://host[:port][/prefix]`. |
-| `--db` | `ghost.db` | SQLite file (created if missing). |
+| `--db` | `captures.db` | SQLite file (created if missing). |
 | `--max-body-bytes` | `104857600` (100 MiB) | Cap on body bytes retained for storage. |
 
 Behavior:
@@ -123,7 +123,7 @@ without blocking the proxy.
 A read-only API binary and a dark-mode React/TypeScript SPA browse captures.
 
 ```
-ghost-api --db ghost.db --listen 127.0.0.1:8090 --static-dir web/dist
+ghost-api --db captures.db --listen 127.0.0.1:8090 --static-dir web/dist
 ```
 
 | Flag | Default | Meaning |
@@ -134,11 +134,20 @@ ghost-api --db ghost.db --listen 127.0.0.1:8090 --static-dir web/dist
 
 ### API endpoints
 
-- `GET /api/captures?method=&status=&path=<sub>&client_addr=&since=&until=&limit=&offset=` — list;
-  `path` does a prefix match on the upstream path. Returns `{count, captures:[...]}`.
+- `GET /api/captures?method=&status=&path=<sub>&client_addr=&since=&until=&error=&limit=&offset=`
+  — list. `method`, `path`, `client_addr`, and `error` are case-insensitive
+  substring matches against their columns; `status` takes a status-code prefix
+  (e.g. `status=4` → all 4xx) or `err`/`error` → rows with no HTTP status
+  (failed exchanges); `since`/`until` compare the `created_at` strings;
+  `limit` defaults to 50 (max 500), `offset` paginates. Returns
+  `{count, captures:[...]}` with `count` = total matches.
 - `GET /api/captures/{id}` — full record: all fields, headers as `[{name,value}]` arrays,
   body views (`text`/`binary`/`hex_preview` with SHA-256).
-- `GET /api/facets` — `{methods, statuses, errors}` for filter dropdowns.
+- `GET /api/captures/{id}/body?part=request|response` — raw stored body bytes as an
+  `application/octet-stream` download (`Content-Disposition: attachment`, plus
+  `x-body-truncated` / `x-body-original-length` headers). No such body → `404`.
+- `GET /api/facets` — `{methods, statuses, errors}` for filter dropdowns; `errors`
+  is the count of rows with an error set, not a list of kinds.
 
 ### Dev flow
 
@@ -146,18 +155,18 @@ ghost-api --db ghost.db --listen 127.0.0.1:8090 --static-dir web/dist
 # Vite dev server (proxies /api → 8090) and API on 8090:
 cd web && npm run dev
 cd ..
-cargo run --bin ghost-api -- --db ghost.db --listen 127.0.0.1:8090
+cargo run --bin ghost-api -- --db captures.db --listen 127.0.0.1:8090
 
 # Or build the ui and serve both the API and web UI:
 cd web && npm run build
 cd ..
-cargo run --bin ghost-api -- --db ghost.db --listen 127.0.0.1:8090 --static-dir web/dist
+cargo run --bin ghost-api -- --db captures.db --listen 127.0.0.1:8090 --static-dir web/dist
 ```
 
 ### Tests
 
 - `cargo test` — Rust unit + e2e + API integration tests.
-- `cd web && npm test` — vitest + jsdom + @testing-library/react (15 tests).
+- `cd web && npm test` — vitest + jsdom + @testing-library/react (28 tests).
 
 ## Development
 
