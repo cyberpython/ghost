@@ -39,22 +39,24 @@ fn build_entry(row: &CaptureRow) -> Value {
     let (url, query_string) = split_url(row);
     let request = build_request(row, &url, &query_string);
     let response = build_response(row);
+    // `cache` and `timings` are listed in the spec's entry object; Chrome
+    // DevTools expects them present. We have no per-phase timing breakdown,
+    // so every phase is -1 (the spec's "not available" sentinel) and `time`
+    // carries the total. Failed exchanges (no HTTP status) get the same block.
+    let timings = json!({
+        "blocked": -1, "dns": -1, "connect": -1, "send": -1,
+        "wait": -1, "receive": -1,
+    });
     let mut entry = json!({
         "startedDateTime": row.created_at,
         "time": row.total_ms,
         "request": request,
         "response": response,
+        "cache": {},
+        "timings": timings,
         "serverIPAddress": row.upstream_authority,
         "comment": row.error.clone(),
     });
-    // Failed exchanges (no HTTP status) get a timings block with -1s so
-    // importers can tell the round trip never completed.
-    if row.status_code.is_none() {
-        entry["timings"] = json!({
-            "blocked": -1, "dns": -1, "connect": -1, "send": -1,
-            "wait": -1, "receive": -1,
-        });
-    }
     entry
 }
 
@@ -112,6 +114,7 @@ fn build_response(row: &CaptureRow) -> Value {
         "status": row.status_code.unwrap_or(0),
         "statusText": status_text,
         "httpVersion": row.response_version.as_deref().map(|v| format!("HTTP/{}", v)).unwrap_or_else(|| "HTTP/1.1".into()),
+        "cookies": [],
         "headers": headers,
         "content": content_object(row.response_body.as_deref(), &row.response_headers, row.response_body_len, row.response_body_truncated),
         "redirectURL": "",
