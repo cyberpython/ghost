@@ -33,7 +33,7 @@ export default function Detail(){
         {infoRows.map(({label, value}) => (
           <tr key={label} className="border-b border-[var(--border)]">
             <td className="text-[var(--muted)] px-2.5 py-1.5 align-top whitespace-nowrap">{label}</td>
-            <td className="px-2.5 py-1.5">{value}</td>
+            <td className="px-2.5 py-1.5 break-all min-w-0">{value}</td>
           </tr>
         ))}
       </tbody>
@@ -41,23 +41,29 @@ export default function Detail(){
     <h3 className="text-lg font-semibold mb-2">Query parameters</h3>
     {params.length ? (
       <table className="border-collapse w-full table-fixed">
-        <thead><tr><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)] w-1/3">Name</th><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)]">Value</th></tr></thead>
-        <tbody>{params.map(([k, v], i) => <tr key={i} className="border-b border-[var(--border)]"><td className="px-2.5 py-1.5">{k}</td><td className="px-2.5 py-1.5">{v}</td></tr>)}</tbody>
+        <thead><tr><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)] w-1/2">Name</th><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)]">Value</th></tr></thead>
+        <tbody>{params.map(([k, v], i) => <tr key={i} className="border-b border-[var(--border)]"><td className="px-2.5 py-1.5 break-all min-w-0">{k}</td><td className="px-2.5 py-1.5 break-all min-w-0">{v}</td></tr>)}</tbody>
       </table>
     ) : <p className="muted">—</p>}
-    <h3 className="text-lg font-semibold mb-2 mt-4">Request headers</h3>
-    <table className="border-collapse w-full table-fixed">
-      <thead><tr><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)] w-1/3">Name</th><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)]">Value</th></tr></thead>
-      <tbody>{d.request_headers.map((h,i)=><tr key={i} className="border-b border-[var(--border)]"><td className="px-2.5 py-1.5">{h.name}</td><td className="px-2.5 py-1.5">{h.value}</td></tr>)}</tbody>
-    </table>
-    <h3 className="text-lg font-semibold mb-2 mt-4">Response headers</h3>
-    <table className="border-collapse w-full table-fixed">
-      <thead><tr><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)] w-1/3">Name</th><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)]">Value</th></tr></thead>
-      <tbody>{d.response_headers.map((h,i)=><tr key={i} className="border-b border-[var(--border)]"><td className="px-2.5 py-1.5">{h.name}</td><td className="px-2.5 py-1.5">{h.value}</td></tr>)}</tbody>
-    </table>
-    <h3 className="text-lg font-semibold mb-2 mt-4">Request body</h3>
-    <BodyViewer view={d.request_body} contentType={reqCt} id={d.id} part="request"/>
-    <h3 className="text-lg font-semibold mb-2 mt-4">Response body</h3>
-    <BodyViewer view={d.response_body} contentType={respCt} id={d.id} part="response"/>
+    <div className="grid grid-cols-1 gap-6 min-[960px]:grid-cols-2">
+      <div>
+        <h3 className="text-lg font-semibold mb-2 mt-4">Request headers</h3>
+        <table className="border-collapse w-full table-fixed">
+          <thead><tr><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)] w-1/3">Name</th><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)]">Value</th></tr></thead>
+          <tbody>{d.request_headers.map((h,i)=><tr key={i} className="border-b border-[var(--border)]"><td className="px-2.5 py-1.5 break-all min-w-0">{h.name}</td><td className="px-2.5 py-1.5 break-all min-w-0">{h.value}</td></tr>)}</tbody>
+        </table>
+        <h3 className="text-lg font-semibold mb-2 mt-4">Request body</h3>
+        <BodyViewer view={d.request_body} contentType={reqCt} id={d.id} part="request"/>
+      </div>
+      <div>
+        <h3 className="text-lg font-semibold mb-2 mt-4">Response headers</h3>
+        <table className="border-collapse w-full table-fixed">
+          <thead><tr><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)] w-1/3">Name</th><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)]">Value</th></tr></thead>
+          <tbody>{d.response_headers.map((h,i)=><tr key={i} className="border-b border-[var(--border)]"><td className="px-2.5 py-1.5 break-all min-w-0">{h.name}</td><td className="px-2.5 py-1.5 break-all min-w-0">{h.value}</td></tr>)}</tbody>
+        </table>
+        <h3 className="text-lg font-semibold mb-2 mt-4">Response body</h3>
+        <BodyViewer view={d.response_body} contentType={respCt} id={d.id} part="response"/>
+      </div>
+    </div>
   </>)
 }

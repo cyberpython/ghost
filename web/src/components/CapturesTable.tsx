@@ -24,9 +24,9 @@ export default function CapturesTable({ captures }: { captures: CaptureListItem[
               if (e.target instanceof HTMLAnchorElement) return
               navigate(`/captures/${row.id}`)
             }}>
-            <td className="px-2.5 py-1.5"><Link to={`/captures/${row.id}`}>{row.created_at}</Link></td>
+            <td className="px-2.5 py-1.5 whitespace-nowrap tabular-nums"><Link to={`/captures/${row.id}`}>{row.created_at}</Link></td>
             <td className="px-2.5 py-1.5"><MethodBadge m={row.request_method}/></td>
-            <td className="px-2.5 py-1.5">{row.request_target}</td>
+            <td className="px-2.5 py-1.5 break-all min-w-0">{row.request_target}</td>
             <td className="px-2.5 py-1.5"><StatusBadge code={row.status_code}/></td>
             <td className="px-2.5 py-1.5">{row.total_ms}</td>
             <td className="px-2.5 py-1.5">{row.client_addr}</td>
