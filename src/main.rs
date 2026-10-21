@@ -46,6 +46,16 @@ struct Args {
     /// Prune captures older than this many days (0 = disabled).
     #[arg(long, value_parser = clap::value_parser!(u64).range(0..=36500))]
     retention_days: Option<u64>,
+
+    /// Record only requests whose client-side path starts with one of these
+    /// plain strings (repeatable; absent = record everything).
+    #[arg(long)]
+    include_path: Vec<String>,
+
+    /// Never record requests whose client-side path starts with one of these
+    /// plain strings, even when an include path matches (repeatable).
+    #[arg(long)]
+    exclude_path: Vec<String>,
 }
 
 #[tokio::main]
@@ -62,6 +72,8 @@ async fn main() -> anyhow::Result<()> {
         db: pool.clone(),
         upstream,
         max_body_bytes: args.max_body_bytes,
+        include_paths: args.include_path,
+        exclude_paths: args.exclude_path,
     };
 
     // Run initial prune if retention is configured.
