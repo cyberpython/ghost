@@ -201,6 +201,15 @@ pub type JsonPath = Vec<JsonSeg>;
 /// unaddressable — deliberately dumb matching, documented as such. Malformed
 /// input → `Err` (startup fails fast; request time never sees it).
 pub fn parse_json_path(s: &str) -> Result<JsonPath, String> {
+    // RFC 9535 alias: `$.body[*].redact` ≡ `body[].redact` — the standard's
+    // root marker and `*` wildcard are accepted. Filters (`[?(…)]`), unions,
+    // recursive descent (`..`) and quoted-name selectors are outside this
+    // subset and fail fast as syntax errors. Consequence of the `$` rule:
+    // JSON keys starting with `$` are not addressable in shorthand form.
+    let s = s
+        .strip_prefix('$')
+        .map(|r| r.strip_prefix('.').unwrap_or(r))
+        .unwrap_or(s);
     let mut path = Vec::new();
     for part in s.split('.') {
         let (name, rest) = match part.find('[') {
@@ -219,7 +228,7 @@ pub fn parse_json_path(s: &str) -> Result<JsonPath, String> {
                 return Err(format!("unterminated array selector in JSON path {s:?}"));
             };
             let inner = &sel[..close];
-            if inner.is_empty() {
+            if inner.is_empty() || inner == "*" {
                 path.push(JsonSeg::AnyIndex);
             } else if inner.chars().all(|c| c.is_ascii_digit()) {
                 path.push(JsonSeg::Index(
@@ -997,6 +1006,22 @@ mod tests {
         );
         assert_eq!(parse_json_path("[].id").unwrap(), vec![AnyIndex, Key("id".into())]);
         assert_eq!(parse_json_path("a.b").unwrap(), vec![Key("a".into()), Key("b".into())]);
+    }
+
+    #[test]
+    fn parse_json_path_rfc9535_alias() {
+        use JsonSeg::*;
+        // The RFC-canonical spelling parses identically to the shorthand.
+        assert_eq!(
+            parse_json_path("$.body[*].redact").unwrap(),
+            parse_json_path("body[].redact").unwrap()
+        );
+        assert_eq!(parse_json_path("$.a").unwrap(), vec![Key("a".into())]);
+        assert_eq!(parse_json_path("$[0].x").unwrap(), vec![Index(0), Key("x".into())]);
+        // Outside the accepted subset → fail fast.
+        assert!(parse_json_path("$.a[?(@.x==1)]").is_err());
+        assert!(parse_json_path("$.a..b").is_err());
+        assert!(parse_json_path("$['quoted']").is_err());
     }
 
     #[test]
