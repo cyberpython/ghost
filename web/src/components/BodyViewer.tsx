@@ -8,6 +8,7 @@ import { getCapture } from '../api'
 import { copyCurlCommand } from '../lib/curl'
 import { copyHurlFile, bytesToBase64 } from '../lib/hurl'
 import JsonTree, { type Json } from './JsonTree'
+import { parseQuery } from '../lib/parseQuery'
 
 export type BodyPart = 'request' | 'response'
 
@@ -160,6 +161,33 @@ export default function BodyViewer({ view, contentType, id, part }:
       <HL lang="markup" code={view.text as string} />
     </>
   )
+  if (t === 'form') {
+    // FR-026d: form bodies decode to a key/value table on the first (default)
+    // tab, mirroring JSON's Tree-first toggle. Raw shows the stored text
+    // as-is. Decoding reuses lib/parseQuery.ts (URLSearchParams semantics;
+    // duplicate keys preserved). An empty or zero-pair body falls back to raw
+    // instead of an empty table.
+    const raw = view.text as string
+    const pairs = parseQuery(raw)
+    return (
+      <>
+        {meta}
+        {shaLine}
+        {banner}
+        {copyGroup}
+        <div className="flex gap-2 mb-2">
+          {pairs.length > 0 && <button onClick={() => setTab('tree')} className={tab === 'tree' ? 'px-3 py-1 rounded bg-[var(--panel)] border border-[var(--border)]' : 'px-3 py-1 rounded border border-[var(--border)]'}>Table</button>}
+          <button onClick={() => setTab('raw')} className={tab === 'raw' ? 'px-3 py-1 rounded bg-[var(--panel)] border border-[var(--border)]' : 'px-3 py-1 rounded border border-[var(--border)]'}>Raw</button>
+        </div>
+        {tab === 'tree' && pairs.length ? (
+          <table className="border-collapse w-full table-fixed">
+            <thead><tr><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)] w-1/2">Name</th><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)]">Value</th></tr></thead>
+            <tbody>{pairs.map(([k, v], i) => <tr key={i} className="border-b border-[var(--border)]"><td className="px-2.5 py-1.5 break-all min-w-0">{k}</td><td className="px-2.5 py-1.5 break-all min-w-0">{v}</td></tr>)}</tbody>
+          </table>
+        ) : <pre className="whitespace-pre-wrap break-all">{raw}</pre>}
+      </>
+    )
+  }
   return (
     <>
       {meta}

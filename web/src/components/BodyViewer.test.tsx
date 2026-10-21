@@ -159,4 +159,36 @@ describe('BodyViewer', () => {
     await fireEvent.click(getByRole('button', { name: 'Copy Hurl' }))
     await waitFor(() => expect(container.textContent).toContain('Copy failed'))
   })
+
+  const fb = { text: 'user=john+doe&pw=***&flag=1&flag=2', binary: false, hex_preview: null, len: 36, sha256: null, truncated: false, text_truncated: false }
+
+  it('renders a decoded table for form-urlencoded bodies (default tab)', () => {
+    const { container } = render(
+      <BodyViewer view={fb} id={1} part="request" contentType="application/x-www-form-urlencoded; charset=UTF-8" />)
+    const rows = container.querySelectorAll('tbody tr')
+    expect(rows).toHaveLength(4)
+    const cell = (r: Element, c: number) => r.children[c].textContent
+    expect(cell(rows[0], 0)).toBe('user')
+    expect(cell(rows[0], 1)).toBe('john doe') // '+' decodes to a space
+    expect(cell(rows[1], 0)).toBe('pw')
+    expect(cell(rows[1], 1)).toBe('***') // stored mask passes through
+    expect(cell(rows[2], 1)).toBe('1')
+    expect(cell(rows[3], 1)).toBe('2') // duplicate keys preserved
+  })
+
+  it('shows the undecoded form body under Raw', () => {
+    const { container, getByRole } = render(
+      <BodyViewer view={fb} id={1} part="request" contentType="application/x-www-form-urlencoded" />)
+    fireEvent.click(getByRole('button', { name: 'Raw' }))
+    expect(container.querySelector('pre')?.textContent)
+      .toBe('user=john+doe&pw=***&flag=1&flag=2')
+  })
+
+  it('falls back to raw when a form body has no pairs', () => {
+    const empty = { ...fb, text: '', len: 0 }
+    const { container } = render(
+      <BodyViewer view={empty} id={1} part="request" contentType="application/x-www-form-urlencoded" />)
+    expect(container.querySelector('table')).toBeNull()
+    expect(container.querySelector('pre')).not.toBeNull()
+  })
 })
