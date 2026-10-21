@@ -50,9 +50,9 @@ export default function List({ auto }: { auto: boolean }) {
   }
   return (<>
     <div className="flex flex-wrap gap-2 my-2">
-      <SelectDropdown value={sp.get('method')??''} options={METHOD_OPTIONS} onChange={v=>set('method',v)} placeholder="Method"/>
+      <SelectDropdown value={sp.get('method')??''} options={METHOD_OPTIONS} onChange={v=>set('method',v)} placeholder="Method" className="flex-1 min-w-[120px]"/>
       {(['status','path','client_addr','since','until','error'] as const).map(k=>(
-        <input key={k} placeholder={k} value={sp.get(k)??''} onChange={e=>set(k,e.target.value)} className="border border-[var(--border)] rounded px-2 py-1 text-sm bg-transparent text-[var(--text)] placeholder-[var(--muted)]"/>
+        <input key={k} placeholder={k} value={sp.get(k)??''} onChange={e=>set(k,e.target.value)} className="flex-1 min-w-[8rem] border border-[var(--border)] rounded px-2 py-1 text-sm bg-transparent text-[var(--text)] placeholder-[var(--muted)]"/>
       ))}
     </div>
     <CapturesTable captures={rows}/>
