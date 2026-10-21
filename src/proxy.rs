@@ -61,6 +61,10 @@ pub struct State {
     /// replaces the built-in list for query parameters only (form fields and
     /// JSON body keys keep the built-in list regardless).
     pub sensitive_query_parameters: Vec<String>,
+    /// FR-011c: parsed JSON-path patterns; when non-empty, JSON body masking
+    /// switches from key-name matching to these paths. Parsed at startup so
+    /// malformed syntax fails fast; request time only ever sees valid paths.
+    pub sensitive_json_paths: Vec<redact::JsonPath>,
 }
 
 /// Accept-and-serve loop. Runs until the process is shutting down.
@@ -420,7 +424,7 @@ fn build_capture(
         .and_then(|v| v.to_str().ok());
     let (req_stored, req_sha) = match req_body_full {
         Some(full) => {
-            let masked = redact::mask_body(full, ct_req);
+            let masked = redact::mask_body_with(full, ct_req, &st.sensitive_json_paths);
             let src = masked.as_deref().unwrap_or(full);
             let cap = src.len().min(st.max_body_bytes);
             (Some(src[..cap].to_vec()), Some(sha256_hex(full)))
@@ -430,7 +434,7 @@ fn build_capture(
     let ct_resp = resp_headers.get(CONTENT_TYPE).and_then(|v| v.to_str().ok());
     let n = (resp_body_len as usize).min(resp_body_full.len());
     let full = &resp_body_full[0..n];
-    let masked = redact::mask_body(full, ct_resp);
+    let masked = redact::mask_body_with(full, ct_resp, &st.sensitive_json_paths);
     let src = masked.as_deref().unwrap_or(full);
     let cap = src.len().min(st.max_body_bytes);
     let (resp_stored, resp_sha) = (

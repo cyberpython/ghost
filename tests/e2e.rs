@@ -208,6 +208,7 @@ async fn transparent_e2e() {
         max_body_bytes: 100 * 1024 * 1024,
         sensitive_headers: redact::default_sensitive_headers(),
         sensitive_query_parameters: redact::default_sensitive_query_parameters(),
+        sensitive_json_paths: Vec::new(),
     };
     let proxy_task = tokio::spawn(proxy::serve(proxy_listener, state));
 
@@ -407,6 +408,7 @@ async fn masking_e2e() {
         max_body_bytes: 100 * 1024 * 1024,
         sensitive_headers: redact::default_sensitive_headers(),
         sensitive_query_parameters: redact::default_sensitive_query_parameters(),
+        sensitive_json_paths: Vec::new(),
     };
     let proxy_task = tokio::spawn(proxy::serve(proxy_listener, state));
 
@@ -497,6 +499,119 @@ async fn masking_e2e() {
     assert_eq!(
         String::from_utf8(body_bytes).unwrap(),
         r#"{"password":"bod***23","safe":"keepme"}"#
+    );
+
+    // Clean up.
+    proxy_task.abort();
+    origin_task.abort();
+}
+
+/// FR-011c: `--sensitive-jsonp` masks JSON values at the configured paths in
+/// the stored row (both directions) while the relay stays unmasked; a
+/// non-JSON body is a silent no-op under jsonp-only config.
+#[tokio::test]
+async fn jsonp_e2e() {
+    let origin_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin_port = origin_listener.local_addr().unwrap().port();
+    let origin_task = tokio::spawn(origin_serve(origin_listener));
+
+    let proxy_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_port = proxy_listener.local_addr().unwrap().port();
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("t.db");
+    let pool = db::init(db_path.to_str().unwrap()).await.unwrap();
+    let upstream = UpstreamBase::parse(&format!("http://127.0.0.1:{origin_port}/app")).unwrap();
+    let pats = redact::parse_json_paths(&[
+        "body[].redact".to_string(),
+        "body[].another".to_string(),
+    ])
+    .unwrap();
+    let state = proxy::State {
+        db: pool.clone(),
+        upstream,
+        max_body_bytes: 100 * 1024 * 1024,
+        sensitive_headers: redact::default_sensitive_headers(),
+        sensitive_query_parameters: redact::default_sensitive_query_parameters(),
+        sensitive_json_paths: pats,
+    };
+    let proxy_task = tokio::spawn(proxy::serve(proxy_listener, state));
+
+    let proxy_addr = format!("127.0.0.1:{proxy_port}");
+    wait_for_listen(&proxy_addr).await;
+
+    // JSON body: values at the configured paths are masked in the stored row.
+    let mut s = TcpStream::connect(&proxy_addr).await.unwrap();
+    let body =
+        br#"{"body":[{"redact":"sk-aaaaaaaaaaaaa"},{"another":"sk-bbbbbbbbbbbbb"},{"keep":"sk-ccccccccccccc"}]}"#;
+    let mut req = format!(
+        "POST /post HTTP/1.1\r\nHost: example.client\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    req.extend_from_slice(body);
+    s.write_all(&req).await.unwrap();
+    let raw = read_full_response(&mut s).await;
+    let (status, _, resp_body) = parse_response(&raw);
+    assert!(status.starts_with("HTTP/1.1 200"), "got: {status}");
+
+    // Second request: a non-JSON body under jsonp-only config.
+    let mut s2 = TcpStream::connect(&proxy_addr).await.unwrap();
+    let body2 = "plain text, not json at all";
+    let mut req2 = format!(
+        "POST /post HTTP/1.1\r\nHost: example.client\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
+        body2.len()
+    )
+    .into_bytes();
+    req2.extend_from_slice(body2.as_bytes());
+    s2.write_all(&req2).await.unwrap();
+    let _ = read_full_response(&mut s2).await;
+
+    // --- Let the inserts land, then assert the DB -------------------------
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+    loop {
+        let c: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM captures")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        if c >= 2 {
+            break;
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!("timed out waiting for 2 rows (got {c})");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let json_id = col_id(
+        &pool,
+        "request_method='POST' AND request_body LIKE '%redact%'",
+    )
+    .await;
+    let plain_id = col_id(
+        &pool,
+        "request_method='POST' AND request_body LIKE '%plain%'",
+    )
+    .await;
+
+    // Stored JSON body: masked at the configured paths, others in clear.
+    let stored = String::from_utf8(col_blob(&pool, json_id, "request_body").await.unwrap()).unwrap();
+    assert_eq!(
+        stored,
+        r#"{"body":[{"redact":"sk-***aa"},{"another":"sk-***bb"},{"keep":"sk-ccccccccccccc"}]}"#
+    );
+
+    // Relay transparency: the origin echoed the RAW bytes (unmasked).
+    let stored_resp =
+        String::from_utf8(col_blob(&pool, json_id, "response_body").await.unwrap()).unwrap();
+    assert!(
+        stored_resp.contains("sk-aaaaaaaaaaaaa"),
+        "origin must receive raw bytes: {stored_resp}"
+    );
+
+    // Non-JSON body: stored unchanged (silent no-op, never dies).
+    assert_eq!(
+        col_blob(&pool, plain_id, "request_body").await.unwrap(),
+        b"plain text, not json at all"
     );
 
     // Clean up.

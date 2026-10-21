@@ -12,6 +12,7 @@
 //! non-sensitive field (e.g. an echoed string) is not scrubbed.
 
 use http::header::{HeaderMap, HeaderValue};
+use std::rc::Rc;
 
 const SENSITIVE_HEADERS: &[&str] = &[
     "authorization",
@@ -179,6 +180,118 @@ pub fn mask_query_with(q: &str, list: &[String]) -> String {
         .join("&")
 }
 
+// ── JSON-path configuration (FR-011c) ───────────────────────────────────
+
+/// One step of a JSON path: an object key (matched case-insensitively, like
+/// the built-in key masking) or an array selector.
+#[derive(Clone, Debug, PartialEq)]
+pub enum JsonSeg {
+    Key(String),
+    AnyIndex,
+    Index(usize),
+}
+
+/// A configured JSON path pattern, e.g. `body[].redact.this.key`.
+pub type JsonPath = Vec<JsonSeg>;
+
+/// Parse a dotted JSON path such as `body[].redact.this.key`, `items[0].name`
+/// or `[].id` (root array). Within a segment a bare `key` is an object-key
+/// step; trailing `[...]` groups are array steps (`[]` = any element,
+/// `[N]` = the Nth element, 0-based). Keys containing literal `[`/`]` are
+/// unaddressable — deliberately dumb matching, documented as such. Malformed
+/// input → `Err` (startup fails fast; request time never sees it).
+pub fn parse_json_path(s: &str) -> Result<JsonPath, String> {
+    let mut path = Vec::new();
+    for part in s.split('.') {
+        let (name, rest) = match part.find('[') {
+            Some(p) => (&part[..p], &part[p..]),
+            None => (part, ""),
+        };
+        if name.is_empty() && rest.is_empty() {
+            return Err(format!("empty segment in JSON path {s:?}"));
+        }
+        if !name.is_empty() {
+            path.push(JsonSeg::Key(name.to_string()));
+        }
+        let mut rest = rest;
+        while let Some(sel) = rest.strip_prefix('[') {
+            let Some(close) = sel.find(']') else {
+                return Err(format!("unterminated array selector in JSON path {s:?}"));
+            };
+            let inner = &sel[..close];
+            if inner.is_empty() {
+                path.push(JsonSeg::AnyIndex);
+            } else if inner.chars().all(|c| c.is_ascii_digit()) {
+                path.push(JsonSeg::Index(
+                    inner
+                        .parse::<usize>()
+                        .map_err(|_| format!("array index too large in JSON path {s:?}"))?,
+                ));
+            } else {
+                return Err(format!("invalid array selector [{inner}] in JSON path {s:?}"));
+            }
+            rest = &sel[close + 1..];
+        }
+        if !rest.is_empty() {
+            return Err(format!("trailing junk after array selector in JSON path {s:?}"));
+        }
+    }
+    Ok(path)
+}
+
+/// Parse every configured value (already comma-split by the shared flag-list
+/// syntax). Errors surface at startup only (FR-011c forgivingness contract).
+pub fn parse_json_paths(vals: &[String]) -> Result<Vec<JsonPath>, String> {
+    vals.iter().map(|s| parse_json_path(s)).collect()
+}
+
+/// A walked path is a persistent `Rc` chain, child-first (the tail is the
+/// deepest step, `parent` links toward the root). One O(1)-sized node per
+/// container/key step with shared prefixes — deep nesting stays linear in
+/// memory, which a per-frame `Vec` clone is not: it is quadratic, and the
+/// 50 000-deep robustness test measured that at ~30 GB.
+struct PathCell {
+    parent: Option<Rc<PathCell>>,
+    step: JsonStep,
+}
+
+/// Steps that appear on the *walked* side; patterns additionally carry
+/// `AnyIndex` (see `JsonSeg`).
+enum JsonStep {
+    Key(String),
+    Idx(usize),
+}
+
+/// Does the walked path (chain tail + depth) match `pat` exactly? The chain
+/// is walked tail→root while the pattern (root-first) is consumed
+/// back-to-front — allocation-free, O(pattern length).
+fn chain_matches(tail: &Rc<PathCell>, depth: usize, pat: &[JsonSeg]) -> bool {
+    if depth != pat.len() {
+        return false;
+    }
+    let mut i = pat.len();
+    let mut node = Some(tail);
+    while let Some(c) = node {
+        i -= 1;
+        let ok = match &c.step {
+            JsonStep::Key(k) => match &pat[i] {
+                JsonSeg::Key(p) => k.eq_ignore_ascii_case(p),
+                _ => false,
+            },
+            JsonStep::Idx(idx) => match &pat[i] {
+                JsonSeg::Index(n) => idx == n,
+                JsonSeg::AnyIndex => true,
+                _ => false,
+            },
+        };
+        if !ok {
+            return false;
+        }
+        node = c.parent.as_ref();
+    }
+    i == 0
+}
+
 /// Percent-decode (`%XX` and `+`→space) for *key* matching only.
 fn pct_decode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -219,7 +332,18 @@ fn pct_decode(s: &str) -> String {
 ///   strings under sensitive object keys are masked in place (key order,
 ///   whitespace and every other byte preserved).
 /// - Anything else (binary, unknown text) → untouched.
+///
+/// Same as [`mask_body_with`] with no JSON-path override (key-name masking).
 pub fn mask_body(body: &[u8], ct: Option<&str>) -> Option<Vec<u8>> {
+    mask_body_with(body, ct, &[])
+}
+
+/// [`mask_body`] with configured JSON paths (FR-011c): when any path is
+/// configured, JSON masking switches from key-name matching to these paths
+/// (exact match, case-insensitive keys, `[]`/`[N]` array selectors).
+/// Non-JSON bodies and unmatched paths are silent no-ops — the body is
+/// stored unchanged and nothing fails. Paths never affect form bodies.
+pub fn mask_body_with(body: &[u8], ct: Option<&str>, pats: &[JsonPath]) -> Option<Vec<u8>> {
     let ct = ct.unwrap_or_default().trim().to_ascii_lowercase();
     if ct.contains("x-www-form-urlencoded") {
         let s = match std::str::from_utf8(body) {
@@ -237,7 +361,7 @@ pub fn mask_body(body: &[u8], ct: Option<&str>) -> Option<Vec<u8>> {
         Ok(s) => s,
         Err(_) => return None,
     };
-    let spans = json_value_spans(s.as_bytes());
+    let spans = json_value_spans_with(s.as_bytes(), pats);
     if spans.is_empty() {
         return None;
     }
@@ -261,7 +385,7 @@ enum Step {
     Punct,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Frame {
     /// Object container (true) or array (false).
     object: bool,
@@ -270,6 +394,15 @@ struct Frame {
     step: Step,
     /// Object only: sensitivity of the value being read.
     value_ctx: bool,
+    /// FR-011c: persistent path chain addressing this container
+    /// (`None` = root depth 0) plus its length.
+    path: Option<Rc<PathCell>>,
+    depth: usize,
+    /// Object only: path chain of the value being read + its length.
+    value_path: Option<Rc<PathCell>>,
+    value_depth: usize,
+    /// Array only: index of the element being read next.
+    arr_idx: usize,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -281,21 +414,24 @@ enum Status {
 
 struct Sc<'a> {
     b: &'a [u8],
+    /// FR-011c: configured JSON-path patterns (empty = key-name masking).
+    pats: &'a [JsonPath],
     i: usize,
     spans: Vec<(usize, usize)>,
     stack: Vec<Frame>,
     bailed: bool,
 }
 
-fn json_value_spans(b: &[u8]) -> Vec<(usize, usize)> {
+fn json_value_spans_with(b: &[u8], pats: &[JsonPath]) -> Vec<(usize, usize)> {
     let mut sc = Sc {
         b,
+        pats,
         i: 0,
         spans: Vec::new(),
         stack: Vec::new(),
         bailed: false,
     };
-    if read_value(&mut sc, false) == Status::Bailed {
+    if read_value(&mut sc, false, None, 0) == Status::Bailed {
         return sc.spans;
     }
     while !sc.stack.is_empty() {
@@ -322,8 +458,20 @@ fn step_once(sc: &mut Sc) {
                 sc.bailed = true;
                 return;
             };
+            // FR-011c: the value path is this container's path + the raw key
+            // token. Key-name masking applies only when no path override is
+            // configured — a jsonp config switches JSON masking to paths.
+            let vp = Rc::new(PathCell {
+                parent: sc.stack[last].path.clone(),
+                step: JsonStep::Key(String::from_utf8_lossy(&sc.b[s..e]).into_owned()),
+            });
+            let vdepth = sc.stack[last].depth + 1;
+            let key_match = sc.pats.is_empty() && is_sensitive_key_bytes(sc.b[s..e].as_ref());
+            let path_match = sc.pats.iter().any(|p| chain_matches(&vp, vdepth, p));
+            sc.stack[last].value_path = Some(vp);
+            sc.stack[last].value_depth = vdepth;
             sc.stack[last].value_ctx =
-                is_sensitive_key_bytes(sc.b[s..e].as_ref()) || sc.stack[last].ambient;
+                key_match || sc.stack[last].ambient || path_match;
             sc.stack[last].step = Step::Colon;
         }
         Step::Colon => {
@@ -336,16 +484,40 @@ fn step_once(sc: &mut Sc) {
             sc.stack[last].step = Step::Value;
         }
         Step::Value => {
-            let ctx = if sc.stack[last].object {
-                sc.stack[last].value_ctx
+            sc.skip_ws();
+            // Empty array: close immediately (an unhandled `]` used to bail
+            // the walk and silently skip every sibling after it).
+            if !sc.stack[last].object && sc.peek() == Some(b']') {
+                sc.i += 1;
+                pop(sc);
+                return;
+            }
+            let is_arr = !sc.stack[last].object;
+            let (ctx, vp, vdepth) = if sc.stack[last].object {
+                let vp = sc.stack[last].value_path.take();
+                (sc.stack[last].value_ctx, vp, sc.stack[last].value_depth)
             } else {
-                sc.stack[last].ambient
+                let vp = Rc::new(PathCell {
+                    parent: sc.stack[last].path.clone(),
+                    step: JsonStep::Idx(sc.stack[last].arr_idx),
+                });
+                let vdepth = sc.stack[last].depth + 1;
+                let ctx = sc.stack[last].ambient
+                    || sc.pats.iter().any(|p| chain_matches(&vp, vdepth, p));
+                (ctx, Some(vp), vdepth)
             };
-            match read_value(sc, ctx) {
+            match read_value(sc, ctx, vp, vdepth) {
                 Status::Completed => {
                     sc.stack[last].step = Step::Punct;
+                    if is_arr {
+                        sc.stack[last].arr_idx += 1;
+                    }
                 }
-                Status::Pushed => {}
+                Status::Pushed => {
+                    if is_arr {
+                        sc.stack[last].arr_idx += 1;
+                    }
+                }
                 Status::Bailed => {
                     sc.bailed = true;
                 }
@@ -386,8 +558,15 @@ fn pop(sc: &mut Sc) {
 }
 
 /// Read one value at `sc.i` (whitespace skipped first). Primitive values
-/// complete inline; containers push a frame.
-fn read_value(sc: &mut Sc, value_ctx: bool) -> Status {
+/// complete inline; containers push a frame. `value_path`/`value_depth` are
+/// the FR-011c path addressing the value being read (the pushed container's
+/// own path).
+fn read_value(
+    sc: &mut Sc,
+    value_ctx: bool,
+    value_path: Option<Rc<PathCell>>,
+    value_depth: usize,
+) -> Status {
     sc.skip_ws();
     match sc.peek() {
         Some(b'"') => match scan_string(sc) {
@@ -406,6 +585,11 @@ fn read_value(sc: &mut Sc, value_ctx: bool) -> Status {
                 ambient: value_ctx,
                 step: Step::Key,
                 value_ctx: false,
+                path: value_path,
+                depth: value_depth,
+                value_path: None,
+                value_depth: 0,
+                arr_idx: 0,
             });
             Status::Pushed
         }
@@ -416,6 +600,11 @@ fn read_value(sc: &mut Sc, value_ctx: bool) -> Status {
                 ambient: value_ctx,
                 step: Step::Value,
                 value_ctx: false,
+                path: value_path,
+                depth: value_depth,
+                value_path: None,
+                value_depth: 0,
+                arr_idx: 0,
             });
             Status::Pushed
         }
@@ -779,6 +968,128 @@ mod tests {
         };
         assert_eq!(get("x-token").as_deref(), Some("ver***n1"));
         assert_eq!(get("authorization").as_deref(), Some("Bearer rawsecret123"));
+    }
+
+    #[test]
+    fn empty_array_does_not_bail_the_walk() {
+        // Regression: an empty array used to bail the walk and silently skip
+        // every sibling after it (their sensitive keys were never masked).
+        let out = mask_body(b"[[],{\"password\":\"hunter2\"}]", JSON_CT).unwrap();
+        assert_eq!(out, br#"[[],{"password":"hu***2"}]"#.to_vec());
+    }
+
+    #[test]
+    fn parse_json_path_ok() {
+        use JsonSeg::*;
+        assert_eq!(
+            parse_json_path("body[].redact.this.key").unwrap(),
+            vec![
+                Key("body".into()),
+                AnyIndex,
+                Key("redact".into()),
+                Key("this".into()),
+                Key("key".into()),
+            ]
+        );
+        assert_eq!(
+            parse_json_path("items[0].name").unwrap(),
+            vec![Key("items".into()), Index(0), Key("name".into())]
+        );
+        assert_eq!(parse_json_path("[].id").unwrap(), vec![AnyIndex, Key("id".into())]);
+        assert_eq!(parse_json_path("a.b").unwrap(), vec![Key("a".into()), Key("b".into())]);
+    }
+
+    #[test]
+    fn parse_json_path_errs() {
+        // Malformed syntax is the only hard failure (startup-time).
+        for bad in ["", "a..b", ".a", "a.", "a[0]b", "a[x]", "a[0"] {
+            assert!(parse_json_path(bad).is_err(), "expected err: {bad:?}");
+        }
+    }
+
+    #[test]
+    fn mask_body_jsonp_paths() {
+        // Canonical example shape: body[] → redact (and → another).
+        let pats =
+            parse_json_paths(&["body[].redact".to_string(), "body[].another".to_string()])
+                .unwrap();
+        let out = mask_body_with(
+            br#"{"body":[{"redact":"sk-aaaaaaaaaaaaa"},{"another":"sk-bbbbbbbbbbbbb"},{"keep":"sk-ccccccccccccc"}]}"#,
+            JSON_CT,
+            &pats,
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            r#"{"body":[{"redact":"sk-***aa"},{"another":"sk-***bb"},{"keep":"sk-ccccccccccccc"}]}"#
+        );
+    }
+
+    #[test]
+    fn mask_body_jsonp_index_and_container() {
+        // `[N]` matches exactly that index.
+        let pats = parse_json_paths(&["items[1]".to_string()]).unwrap();
+        let out = mask_body_with(
+            br#"{"items":["a123456789012","b123456789012"]}"#,
+            JSON_CT,
+            &pats,
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            r#"{"items":["a123456789012","b12***12"]}"#
+        );
+        // A path landing on a container masks everything inside it.
+        let pats = parse_json_paths(&["body[]".to_string()]).unwrap();
+        let out = mask_body_with(
+            br#"{"body":[{"any":"q12345678901"},{"deep":{"x":"r12345678901"}}]}"#,
+            JSON_CT,
+            &pats,
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            r#"{"body":[{"any":"q12***01"},{"deep":{"x":"r12***01"}}]}"#
+        );
+    }
+
+    #[test]
+    fn mask_body_jsonp_replaces_key_matching_and_noops() {
+        // With a path override configured, key-name masking is switched off:
+        // only the configured paths mask.
+        let pats = parse_json_paths(&["inner".to_string()]).unwrap();
+        let out = mask_body_with(
+            br#"{"password":"hunter2","inner":"z12345678901"}"#,
+            JSON_CT,
+            &pats,
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            r#"{"password":"hunter2","inner":"z12***01"}"#
+        );
+        // Non-JSON body under jsonp-only config: silent no-op, never dies.
+        assert_eq!(
+            mask_body_with(b"plain text", JSON_CT, &parse_json_paths(&["body[]".to_string()]).unwrap()),
+            None
+        );
+        // Unmatched path: silent no-op.
+        assert_eq!(
+            mask_body_with(
+                br#"{"a":"v12345678901"}"#,
+                JSON_CT,
+                &parse_json_paths(&["nope[]".to_string()]).unwrap()
+            ),
+            None
+        );
+        // Form body under jsonp config: form masking unaffected.
+        let out = mask_body_with(
+            b"password=hunter2",
+            Some("application/x-www-form-urlencoded"),
+            &parse_json_paths(&["body[]".to_string()]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(out, b"password=hu***2");
     }
 
     #[test]

@@ -35,6 +35,13 @@ struct Args {
     /// keys keep the built-in list (repeatable, comma-separated).
     #[arg(long)]
     sensitive_keys: Vec<String>,
+
+    /// JSON paths (e.g. `body[].redact.this.key`) whose values are masked
+    /// before storage — replaces key-name JSON masking when set. Non-JSON
+    /// bodies and unmatched paths are silent no-ops (repeatable,
+    /// comma-separated).
+    #[arg(long)]
+    sensitive_jsonp: Vec<String>,
 }
 
 /// Flag-list syntax shared by all sensitive-list overrides: occurrences
@@ -67,6 +74,14 @@ async fn main() -> anyhow::Result<()> {
     } else {
         split_list(&args.sensitive_keys)
     };
+    // Malformed JSON-path syntax is the only hard failure: at startup, before
+    // the listener binds (FR-011c forgivingness contract).
+    let sensitive_json_paths = if args.sensitive_jsonp.is_empty() {
+        Vec::new()
+    } else {
+        redact::parse_json_paths(&split_list(&args.sensitive_jsonp))
+            .map_err(anyhow::Error::msg)?
+    };
     let pool = db::init(&args.db).await?;
     let listener = tokio::net::TcpListener::bind(args.listen).await?;
     let state = proxy::State {
@@ -75,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
         max_body_bytes: args.max_body_bytes,
         sensitive_headers,
         sensitive_query_parameters,
+        sensitive_json_paths,
     };
 
     tracing::info!(
