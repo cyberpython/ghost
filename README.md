@@ -37,6 +37,7 @@ ghost --listen 127.0.0.1:8080 --upstream http://127.0.0.1:9000/app --db captures
 | `--upstream` | *(required)* | Fixed upstream base: `http://host[:port][/prefix]`. |
 | `--db` | `captures.db` | SQLite file (created if missing). |
 | `--max-body-bytes` | `104857600` (100 MiB) | Cap on body bytes retained for storage. |
+| `--sensitive-headers <name>` | *(built-in list)* | Header names masked before storage, replacing the built-in sensitive list. Repeatable, and each occurrence may carry comma-separated names. |
 
 Behavior:
 

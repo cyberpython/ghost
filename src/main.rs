@@ -4,7 +4,7 @@
 use clap::Parser;
 use std::net::SocketAddr;
 
-use ghost::{db, proxy, url_join};
+use ghost::{db, proxy, redact, url_join};
 
 #[derive(Parser)]
 #[command(version, about, long_about)]
@@ -24,6 +24,11 @@ struct Args {
     /// Cap on body bytes retained for storage (relaying is always in full).
     #[arg(long, default_value_t = 100 * 1024 * 1024)]
     max_body_bytes: usize,
+
+    /// Header names to mask before storage, replacing the built-in sensitive
+    /// list (repeatable, comma-separated inside an occurrence).
+    #[arg(long)]
+    sensitive_headers: Vec<String>,
 }
 
 #[tokio::main]
@@ -34,12 +39,25 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
     let upstream = url_join::UpstreamBase::parse(&args.upstream)?;
+    // Sensitive-list overrides replace the compiled-in defaults (never merge);
+    // occurrences accumulate and may carry comma-separated values.
+    let sensitive_headers = if args.sensitive_headers.is_empty() {
+        redact::default_sensitive_headers()
+    } else {
+        args.sensitive_headers
+            .iter()
+            .flat_map(|s| s.split(','))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    };
     let pool = db::init(&args.db).await?;
     let listener = tokio::net::TcpListener::bind(args.listen).await?;
     let state = proxy::State {
         db: pool,
         upstream,
         max_body_bytes: args.max_body_bytes,
+        sensitive_headers,
     };
 
     tracing::info!(

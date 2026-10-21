@@ -99,6 +99,18 @@ pub fn is_sensitive_header(name: &str) -> bool {
     SENSITIVE_HEADERS.iter().any(|h| *h == n)
 }
 
+/// The compiled-in sensitive-header list as owned strings — the default when
+/// `--sensitive-headers` is not given (FR-011a overrides replace this list
+/// wholesale; they never merge with it).
+pub fn default_sensitive_headers() -> Vec<String> {
+    SENSITIVE_HEADERS.iter().map(|s| s.to_string()).collect()
+}
+
+/// Case-insensitive exact match against the configured header list.
+pub fn is_sensitive_header_in(name: &str, list: &[String]) -> bool {
+    list.iter().any(|h| name.eq_ignore_ascii_case(h))
+}
+
 /// Does this query-param / JSON object key name mark the value as sensitive?
 /// (Case-insensitive, exact match — `api_keys`/`tokens` do not match.)
 pub fn is_sensitive_key(name: &str) -> bool {
@@ -107,12 +119,12 @@ pub fn is_sensitive_key(name: &str) -> bool {
 }
 
 /// Return (canonical-lowercase-name, value) pairs in original order; the
-/// value is masked iff the name is sensitive.
-pub fn mask_headers(h: &HeaderMap<HeaderValue>) -> Vec<(String, String)> {
+/// value is masked iff the name is in the configured sensitive list.
+pub fn mask_headers_with(h: &HeaderMap<HeaderValue>, list: &[String]) -> Vec<(String, String)> {
     h.iter()
         .map(|(name, value)| {
             let value = value.to_str().unwrap_or("");
-            let value = if is_sensitive_header(name.as_str()) {
+            let value = if is_sensitive_header_in(name.as_str(), list) {
                 mask_value(value)
             } else {
                 value.to_string()
@@ -120,6 +132,11 @@ pub fn mask_headers(h: &HeaderMap<HeaderValue>) -> Vec<(String, String)> {
             (name.as_str().to_string(), value)
         })
         .collect()
+}
+
+/// Same as [`mask_headers_with`] against the compiled-in default list.
+pub fn mask_headers(h: &HeaderMap<HeaderValue>) -> Vec<(String, String)> {
+    mask_headers_with(h, &default_sensitive_headers())
 }
 
 /// Mask sensitive params in a query string (or `a=b&c=d` form body).
@@ -710,5 +727,33 @@ mod tests {
         let m = std::str::from_utf8(&masked).unwrap();
         assert!(!m.contains("AAAA"), "raw run leaked: {m}");
         assert!(m.contains("AAA***"), "slice not masked: {m}");
+    }
+
+    #[test]
+    fn is_sensitive_header_in_replaces_defaults() {
+        // FR-011a: an override list replaces the defaults wholesale — built-ins
+        // no longer match, and the compiled-in fn is unchanged.
+        let list = vec!["x-custom-secret".to_string()];
+        assert!(is_sensitive_header_in("X-CUSTOM-SECRET", &list));
+        assert!(is_sensitive_header_in("x-custom-secret", &list));
+        assert!(!is_sensitive_header_in("authorization", &list));
+        assert!(is_sensitive_header("AUTHORIZATION"));
+        assert!(!is_sensitive_header("x-custom-secret"));
+    }
+
+    #[test]
+    fn mask_headers_with_override() {
+        let list = vec!["x-token".to_string()];
+        let mut h = HeaderMap::new();
+        h.append("Authorization", HeaderValue::from_static("Bearer rawsecret123"));
+        h.append("X-Token", HeaderValue::from_static("verysecrettoken1"));
+        let out = mask_headers_with(&h, &list);
+        let get = |n: &str| {
+            out.iter()
+                .find(|(k, _)| k == n)
+                .map(|(_, v)| v.clone())
+        };
+        assert_eq!(get("x-token").as_deref(), Some("ver***n1"));
+        assert_eq!(get("authorization").as_deref(), Some("Bearer rawsecret123"));
     }
 }

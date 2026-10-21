@@ -54,6 +54,9 @@ pub struct State {
     /// Max bytes of a body retained for storage (the stored copy is truncated
     /// here; relaying is always in full).
     pub max_body_bytes: usize,
+    /// FR-011a: header names masked before storage; a CLI override replaces
+    /// the compiled-in default list wholesale (never merges with it).
+    pub sensitive_headers: Vec<String>,
 }
 
 /// Accept-and-serve loop. Runs until the process is shutting down.
@@ -447,7 +450,7 @@ fn build_capture(
         request_version: req_version.to_string(),
         request_method: method.to_string(),
         request_target,
-        request_headers: headers_to_json(&redact::mask_headers(client_headers)),
+        request_headers: headers_to_json(&redact::mask_headers_with(client_headers, &st.sensitive_headers)),
         request_body: req_stored,
         request_body_len: req_body_len,
         request_body_truncated: req_body_truncated,
@@ -458,7 +461,7 @@ fn build_capture(
         upstream_query: up_query.map(redact::mask_query),
         response_version: resp_version.map(|s| s.to_string()),
         status_code: resp_status.map(|s| s as i32),
-        response_headers: headers_to_json(&redact::mask_headers(resp_headers)),
+        response_headers: headers_to_json(&redact::mask_headers_with(resp_headers, &st.sensitive_headers)),
         response_body: resp_stored,
         response_body_len: resp_body_len,
         response_body_truncated: resp_body_truncated,

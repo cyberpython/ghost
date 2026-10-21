@@ -4,7 +4,7 @@
 
 use bytes::Bytes;
 use ghost::url_join::UpstreamBase;
-use ghost::{db, proxy};
+use ghost::{db, proxy, redact};
 use http_body_util::{BodyExt, Full, Limited, combinators::BoxBody};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -206,6 +206,7 @@ async fn transparent_e2e() {
         db: pool.clone(),
         upstream,
         max_body_bytes: 100 * 1024 * 1024,
+        sensitive_headers: redact::default_sensitive_headers(),
     };
     let proxy_task = tokio::spawn(proxy::serve(proxy_listener, state));
 
@@ -403,6 +404,7 @@ async fn masking_e2e() {
         db: pool.clone(),
         upstream,
         max_body_bytes: 100 * 1024 * 1024,
+        sensitive_headers: redact::default_sensitive_headers(),
     };
     let proxy_task = tokio::spawn(proxy::serve(proxy_listener, state));
 
