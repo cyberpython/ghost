@@ -29,6 +29,23 @@ struct Args {
     /// list (repeatable, comma-separated inside an occurrence).
     #[arg(long)]
     sensitive_headers: Vec<String>,
+
+    /// Query-parameter names to mask before storage, replacing the built-in
+    /// sensitive list for query parameters only — form fields and JSON body
+    /// keys keep the built-in list (repeatable, comma-separated).
+    #[arg(long)]
+    sensitive_keys: Vec<String>,
+}
+
+/// Flag-list syntax shared by all sensitive-list overrides: occurrences
+/// accumulate and may carry comma-separated values; empty entries are
+/// dropped after trimming.
+fn split_list(vals: &[String]) -> Vec<String> {
+    vals.iter()
+        .flat_map(|s| s.split(','))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 #[tokio::main]
@@ -39,17 +56,16 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
     let upstream = url_join::UpstreamBase::parse(&args.upstream)?;
-    // Sensitive-list overrides replace the compiled-in defaults (never merge);
-    // occurrences accumulate and may carry comma-separated values.
+    // Sensitive-list overrides replace the compiled-in defaults (never merge).
     let sensitive_headers = if args.sensitive_headers.is_empty() {
         redact::default_sensitive_headers()
     } else {
-        args.sensitive_headers
-            .iter()
-            .flat_map(|s| s.split(','))
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
+        split_list(&args.sensitive_headers)
+    };
+    let sensitive_query_parameters = if args.sensitive_keys.is_empty() {
+        redact::default_sensitive_query_parameters()
+    } else {
+        split_list(&args.sensitive_keys)
     };
     let pool = db::init(&args.db).await?;
     let listener = tokio::net::TcpListener::bind(args.listen).await?;
@@ -58,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
         upstream,
         max_body_bytes: args.max_body_bytes,
         sensitive_headers,
+        sensitive_query_parameters,
     };
 
     tracing::info!(

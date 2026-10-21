@@ -38,6 +38,7 @@ ghost --listen 127.0.0.1:8080 --upstream http://127.0.0.1:9000/app --db captures
 | `--db` | `captures.db` | SQLite file (created if missing). |
 | `--max-body-bytes` | `104857600` (100 MiB) | Cap on body bytes retained for storage. |
 | `--sensitive-headers <name>` | *(built-in list)* | Header names masked before storage, replacing the built-in sensitive list. Repeatable, and each occurrence may carry comma-separated names. |
+| `--sensitive-keys <name>` | *(built-in list)* | Query-parameter names masked before storage, replacing the built-in sensitive list **for query parameters only**. Repeatable, comma-separated. Form-body and JSON-body key masking keep the built-in list and are not affected by this flag. |
 
 Behavior:
 

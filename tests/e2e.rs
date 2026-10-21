@@ -207,6 +207,7 @@ async fn transparent_e2e() {
         upstream,
         max_body_bytes: 100 * 1024 * 1024,
         sensitive_headers: redact::default_sensitive_headers(),
+        sensitive_query_parameters: redact::default_sensitive_query_parameters(),
     };
     let proxy_task = tokio::spawn(proxy::serve(proxy_listener, state));
 
@@ -405,6 +406,7 @@ async fn masking_e2e() {
         upstream,
         max_body_bytes: 100 * 1024 * 1024,
         sensitive_headers: redact::default_sensitive_headers(),
+        sensitive_query_parameters: redact::default_sensitive_query_parameters(),
     };
     let proxy_task = tokio::spawn(proxy::serve(proxy_listener, state));
 

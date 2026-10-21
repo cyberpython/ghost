@@ -57,6 +57,10 @@ pub struct State {
     /// FR-011a: header names masked before storage; a CLI override replaces
     /// the compiled-in default list wholesale (never merges with it).
     pub sensitive_headers: Vec<String>,
+    /// FR-011b: query-parameter names masked before storage; a CLI override
+    /// replaces the built-in list for query parameters only (form fields and
+    /// JSON body keys keep the built-in list regardless).
+    pub sensitive_query_parameters: Vec<String>,
 }
 
 /// Accept-and-serve loop. Runs until the process is shutting down.
@@ -440,7 +444,7 @@ fn build_capture(
     // Store the request target with sensitive query params masked.
     let (tp, tq) = split_target(target);
     let request_target = match tq {
-        Some(q) => format!("{tp}?{}", redact::mask_query(q)),
+        Some(q) => format!("{tp}?{}", redact::mask_query_with(q, &st.sensitive_query_parameters)),
         None => target.to_string(),
     };
     Capture {
@@ -458,7 +462,7 @@ fn build_capture(
         upstream_scheme: st.upstream.scheme.clone(),
         upstream_authority: st.upstream.authority.clone(),
         upstream_path: up_path.to_string(),
-        upstream_query: up_query.map(redact::mask_query),
+        upstream_query: up_query.map(|q| redact::mask_query_with(q, &st.sensitive_query_parameters)),
         response_version: resp_version.map(|s| s.to_string()),
         status_code: resp_status.map(|s| s as i32),
         response_headers: headers_to_json(&redact::mask_headers_with(resp_headers, &st.sensitive_headers)),

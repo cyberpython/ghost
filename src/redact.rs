@@ -31,7 +31,12 @@ const SENSITIVE_HEADERS: &[&str] = &[
     "x-xsrf-token",
 ];
 
-const SENSITIVE_KEYS: &[&str] = &[
+/// Query-parameter names whose values are masked before storage
+/// (case-insensitive exact match, matched after percent-decoding).
+/// `--sensitive-keys` replaces this list for **query-parameter masking
+/// only** (FR-011b). Form-body and JSON-body key masking keep the built-in
+/// list regardless of overrides.
+const SENSITIVE_QUERY_PARAMETERS: &[&str] = &[
     "api_key",
     "apikey",
     "key",
@@ -115,7 +120,19 @@ pub fn is_sensitive_header_in(name: &str, list: &[String]) -> bool {
 /// (Case-insensitive, exact match — `api_keys`/`tokens` do not match.)
 pub fn is_sensitive_key(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
-    SENSITIVE_KEYS.iter().any(|k| *k == n)
+    SENSITIVE_QUERY_PARAMETERS.iter().any(|k| *k == n)
+}
+
+/// The compiled-in sensitive query-parameter list as owned strings — the
+/// default when `--sensitive-keys` is not given (FR-011b overrides replace
+/// this list for query-parameter masking only).
+pub fn default_sensitive_query_parameters() -> Vec<String> {
+    SENSITIVE_QUERY_PARAMETERS.iter().map(|s| s.to_string()).collect()
+}
+
+/// Case-insensitive exact match against the configured query-param list.
+pub fn is_sensitive_key_in(name: &str, list: &[String]) -> bool {
+    list.iter().any(|k| name.eq_ignore_ascii_case(k))
 }
 
 /// Return (canonical-lowercase-name, value) pairs in original order; the
@@ -139,14 +156,21 @@ pub fn mask_headers(h: &HeaderMap<HeaderValue>) -> Vec<(String, String)> {
     mask_headers_with(h, &default_sensitive_headers())
 }
 
-/// Mask sensitive params in a query string (or `a=b&c=d` form body).
-/// Non-sensitive pairs are kept byte-exact; bare keys and empty values are
-/// untouched. Keys are matched after percent-decoding, so a percent-encoded
-/// sensitive key is still recognised.
+/// Mask sensitive params in a query string (or `a=b&c=d` form body) with the
+/// built-in list. Form-body masking rides this default path deliberately:
+/// query overrides (`--sensitive-keys`) never reach form fields.
 pub fn mask_query(q: &str) -> String {
+    mask_query_with(q, &default_sensitive_query_parameters())
+}
+
+/// [`mask_query`] against an explicit list (the FR-011b override path for
+/// query parameters). Same pair semantics: non-sensitive pairs kept
+/// byte-exact, bare keys and empty values untouched, keys matched after
+/// percent-decoding.
+pub fn mask_query_with(q: &str, list: &[String]) -> String {
     q.split('&')
         .map(|pair| match pair.split_once('=') {
-            Some((k, v)) if is_sensitive_key(&pct_decode(k)) => {
+            Some((k, v)) if is_sensitive_key_in(&pct_decode(k), list) => {
                 format!("{k}={}", mask_value(v))
             }
             _ => pair.to_string(),
@@ -755,5 +779,34 @@ mod tests {
         };
         assert_eq!(get("x-token").as_deref(), Some("ver***n1"));
         assert_eq!(get("authorization").as_deref(), Some("Bearer rawsecret123"));
+    }
+
+    #[test]
+    fn is_sensitive_key_in_replaces_defaults() {
+        // FR-011b: an override list replaces the built-in query-param list
+        // wholesale; the built-in fn (JSON keys + form path) is unchanged.
+        let list = vec!["user_id".to_string()];
+        assert!(is_sensitive_key_in("USER_ID", &list));
+        assert!(is_sensitive_key_in("user_id", &list));
+        assert!(!is_sensitive_key_in("api_key", &list));
+        assert!(is_sensitive_key("API_KEY"));
+    }
+
+    #[test]
+    fn mask_query_with_override() {
+        let list = vec!["user_id".to_string()];
+        // Override matches; built-ins no longer do in the override path.
+        assert_eq!(
+            mask_query_with("user_id=12345678&api_key=hunter2", &list),
+            "user_id=12***8&api_key=hunter2"
+        );
+        // Same matching rule as the built-in: key matched after
+        // percent-decoding, key token preserved byte-exact.
+        assert_eq!(mask_query_with("user%5Fid=12345678", &list), "user%5Fid=12***8");
+        // The built-in default still masks api_key.
+        assert_eq!(
+            mask_query_with("api_key=hunter2", &default_sensitive_query_parameters()),
+            "api_key=hu***2"
+        );
     }
 }
