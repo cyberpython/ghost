@@ -137,8 +137,74 @@ fn normalize_status(raw: Option<&str>) -> (Option<&str>, bool) {
 
 // ── Body view helper ────────────────────────────────────────────────────────
 
-fn body_view(bytes: Option<Vec<u8>>, truncated: i64, sha: Option<String>) -> Value {
-    let bytes = bytes.unwrap_or_default();
+// ── Decode-on-read (FR-019) ────────────────────────────────────────────
+
+/// Bounded inflate for the *view* only: stored bytes stay compressed on
+/// disk (FR-004/FR-010 semantics); the decoded result never exceeds this
+/// cap, so a decompression bomb falls back to the raw view instead of
+/// exploding RAM. View-path only — there is no decode-on-write.
+const MAX_DECODE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Inflate `bytes` for the view. Accepts a single `gzip`/`deflate` coding
+/// (`deflate` = zlib per RFC 9110, with a raw-deflate retry since some
+/// servers emit that); anything else — multi-coding lists, `br`, unknown —
+/// is a silent no-op: the raw view, exactly as before this FR.
+fn decode_body_view(bytes: &[u8], encoding: &str) -> Option<(Vec<u8>, &'static str)> {
+    let enc = encoding.trim().to_ascii_lowercase();
+    if enc.contains(',') {
+        return None;
+    }
+    match enc.as_str() {
+        "gzip" => {
+            bounded_inflate(&mut flate2::read::MultiGzDecoder::new(bytes)).map(|b| (b, "gzip"))
+        }
+        "deflate" => bounded_inflate(&mut flate2::read::ZlibDecoder::new(bytes))
+            .or_else(|| bounded_inflate(&mut flate2::read::DeflateDecoder::new(bytes)))
+            .map(|b| (b, "deflate")),
+        _ => None,
+    }
+}
+
+fn bounded_inflate<R: std::io::Read>(r: &mut R) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    let mut out = Vec::new();
+    r.take((MAX_DECODE_BYTES + 1) as u64)
+        .read_to_end(&mut out)
+        .ok()?;
+    if out.len() > MAX_DECODE_BYTES {
+        return None;
+    }
+    Some(out)
+}
+
+/// Pull the first value of a header out of the stored `[{name,value}]` JSON.
+fn header_value(headers_json: &str, name: &str) -> Option<String> {
+    let arr = serde_json::from_str::<Value>(headers_json).ok()?;
+    arr.as_array()?
+        .iter()
+        .find(|h| {
+            h.get("name")
+                .and_then(|v| v.as_str())
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        })
+        .and_then(|h| h.get("value").and_then(|v| v.as_str()))
+        .map(|s| s.to_string())
+}
+
+fn body_view(
+    bytes: Option<Vec<u8>>,
+    truncated: i64,
+    sha: Option<String>,
+    encoding: Option<&str>,
+) -> Value {
+    let raw = bytes.unwrap_or_default();
+    let (bytes, decoded_via) = match encoding {
+        Some(e) => match decode_body_view(&raw, e) {
+            Some((b, enc)) => (b, Some(enc)),
+            None => (raw, None),
+        },
+        None => (raw, None),
+    };
     let stored_len = bytes.len() as i64;
     let is_utf8 = std::str::from_utf8(&bytes).is_ok();
     let too_big = stored_len > 1024 * 1024;
@@ -167,6 +233,7 @@ fn body_view(bytes: Option<Vec<u8>>, truncated: i64, sha: Option<String>) -> Val
         "len": stored_len,
         "sha256": sha,
         "truncated": truncated == 1,
+        "decoded_encoding": decoded_via,
     })
 }
 
@@ -293,6 +360,8 @@ async fn detail(
     let response_headers =
         serde_json::from_str::<Value>(&row.response_headers)
             .unwrap_or(Value::Array(vec![]));
+    let req_encoding = header_value(&row.request_headers, "content-encoding");
+    let resp_encoding = header_value(&row.response_headers, "content-encoding");
 
     Ok(Json(json!({
         "id": row.id,
@@ -307,6 +376,7 @@ async fn detail(
             row.request_body,
             row.request_body_truncated,
             row.request_body_sha256,
+            req_encoding.as_deref(),
         ),
         "upstream_scheme": row.upstream_scheme,
         "upstream_authority": row.upstream_authority,
@@ -319,6 +389,7 @@ async fn detail(
             row.response_body,
             row.response_body_truncated,
             row.response_body_sha256,
+            resp_encoding.as_deref(),
         ),
         "error": row.error,
     })))

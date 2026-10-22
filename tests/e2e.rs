@@ -26,6 +26,8 @@ async fn origin_handle(req: Request<Incoming>) -> Res {
         .path_and_query()
         .map(|s| s.to_string())
         .unwrap_or_default();
+    // FR-003 amendment pin: was the request-target absolute-form on the wire?
+    let absolute_target = req.uri().scheme_str().is_some();
     let headers: Vec<String> = req
         .headers()
         .iter()
@@ -41,6 +43,7 @@ async fn origin_handle(req: Request<Incoming>) -> Res {
     let json = serde_json::json!({
         "method": method.to_string(),
         "target": target,
+        "absolute_target": absolute_target,
         "headers": headers,
         "body": String::from_utf8_lossy(&body).to_string(),
     });
@@ -234,6 +237,9 @@ async fn transparent_e2e() {
     let body_str = std::str::from_utf8(&body).unwrap();
     let echo: serde_json::Value = serde_json::from_str(body_str).unwrap();
     assert_eq!(echo["target"], "/app/endpoint/path?q=1");
+    // FR-003 amendment: the upstream receives an origin-form request-target
+    // (path?query), not the resolved absolute URI.
+    assert_eq!(echo["absolute_target"], false);
     assert_eq!(echo["method"], "POST");
     assert_eq!(echo["body"], "hello-body");
     let hdrs: Vec<String> = echo["headers"]

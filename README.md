@@ -146,6 +146,21 @@ ghost-api --db captures.db --listen 127.0.0.1:8090 --static-dir web/dist
 - `GET /api/captures/{id}/body?part=request|response` — raw stored body bytes as an
   `application/octet-stream` download (`Content-Disposition: attachment`, plus
   `x-body-truncated` / `x-body-original-length` headers). No such body → `404`.
+  The raw endpoint always serves the **stored (compressed) bytes** — decoding
+  never applies here, so downloads and byte-faithful replays stay exact.
+- **Decode-on-read (FR-019):** in the capture detail, a body with a single
+  `Content-Encoding: gzip`/`deflate` coding is transparently inflated for the
+  *view only* — stored bytes stay compressed, `sha256` still hashes the on-wire
+  body, and the UI shows a `decoded from gzip/deflate` badge. Decoding is
+  bounded (8 MiB); corrupt input, multi-coding lists (`gzip, br`) and anything
+  else fall back to the raw view silently. Copy cURL / Copy Hurl always use the
+  raw wire bytes (decoded bodies take the binary paths), so replays stay
+  byte-faithful.
+  **Security note:** masking is applied at write time and cannot see inside
+  compressed bodies — fields that would be masked in an uncompressed body are
+  visible in the decoded view. The raw bytes were always retrievable via the
+  download endpoint; decoding makes them readable. Treat compressed bodies as
+  unmasked content.
 - `GET /api/facets` — `{methods, statuses, errors}` for filter dropdowns; `errors`
   is the count of rows with an error set, not a list of kinds.
 

@@ -51,7 +51,10 @@ export default function BodyViewer({ view, contentType, id, part }:
     try {
       const d = await getCapture(id)
       let b64: string | null = null
-      if (d.request_body.text === null && d.request_body.len > 0 && !d.request_body.truncated) {
+      // A view-decoded body (FR-019) is not the wire bytes: fetch the RAW
+      // stored bytes so the base64 fence replays byte-faithfully.
+      if ((d.request_body.text === null || d.request_body.decoded_encoding !== null)
+        && d.request_body.len > 0 && !d.request_body.truncated) {
         const r = await fetch(`/api/captures/${id}/body?part=request`)
         if (!r.ok) throw new Error('http ' + r.status)
         b64 = bytesToBase64(new Uint8Array(await r.arrayBuffer()))
@@ -86,6 +89,9 @@ export default function BodyViewer({ view, contentType, id, part }:
   const meta = (
     <div className="muted text-sm mb-1">
       {view.len} B{view.truncated ? ' · truncated' : ''}
+      {view.decoded_encoding && (
+        <span className="ml-2 border border-[var(--border)] rounded px-1.5 py-0.5">decoded from {view.decoded_encoding}</span>
+      )}
     </div>
   )
   const shaLine = view.sha256 ? (
