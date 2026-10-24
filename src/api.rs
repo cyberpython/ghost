@@ -444,6 +444,29 @@ async fn raw_body(
     Ok(res)
 }
 
+// S/N adjacency for the detail view's Prev/Next (FR-039): the nearest lower
+// and higher capture ids, resolved — never assumed id±1, gaps are expected
+// (retention pruning, path filters, insert failures). Lenient for unknown ids
+// (deep links): the nearest existing neighbors still come back; ends → null.
+async fn adjacent(
+    Path(id): Path<u64>,
+    State(pool): State<sqlx::sqlite::SqlitePool>,
+) -> R {
+    let prev: Option<i64> =
+        sqlx::query_scalar("SELECT MAX(id) FROM captures WHERE id < ?")
+            .bind(id as i64)
+            .fetch_one(&pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let next: Option<i64> =
+        sqlx::query_scalar("SELECT MIN(id) FROM captures WHERE id > ?")
+            .bind(id as i64)
+            .fetch_one(&pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(json!({ "prev": prev, "next": next })))
+}
+
 async fn facets(
     State(pool): State<sqlx::sqlite::SqlitePool>,
 ) -> R {
@@ -485,6 +508,7 @@ pub fn build_router(pool: sqlx::sqlite::SqlitePool, static_dir: &StdPath) -> Rou
         .route("/api/captures/{id}/body", get(raw_body))
         .route("/api/export/captures", get(har_list))
         .route("/api/export/captures/{id}", get(har_detail))
+        .route("/api/captures/{id}/adjacent", get(adjacent))
         .route("/api/facets", get(facets))
         .with_state(pool);
     if static_dir.exists() {

@@ -536,6 +536,39 @@ async fn api_integration() {
         assert!(sl.starts_with("HTTP/1.1 404"));
     }
 
+    // ── Adjacency (FR-039) ──────────────────────────────────────────────
+
+    // Middle id: both neighbors resolved.
+    {
+        let (sl, body) = get(port, "/api/captures/3/adjacent").await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["prev"], 2);
+        assert_eq!(j["next"], 4);
+    }
+    // First id: prev is null.
+    {
+        let (sl, body) = get(port, "/api/captures/1/adjacent").await;
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["prev"], Value::Null);
+        assert_eq!(j["next"], 2);
+    }
+    // Last id: next is null.
+    {
+        let (sl, body) = get(port, "/api/captures/5/adjacent").await;
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["prev"], 4);
+        assert_eq!(j["next"], Value::Null);
+    }
+    // Unknown id: lenient — nearest existing neighbors, no 404.
+    {
+        let (sl, body) = get(port, "/api/captures/9999/adjacent").await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["prev"], 5);
+        assert_eq!(j["next"], Value::Null);
+    }
+
     // ── Cleanup ────────────────────────────────────────────────────────────
     srv.abort();
 }

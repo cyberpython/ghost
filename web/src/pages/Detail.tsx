@@ -1,17 +1,38 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router'
-import { getCapture } from '../api'
-import type { CaptureDetail } from '../api'
+import { useParams, useNavigate } from 'react-router'
+import { getCapture, getAdjacent } from '../api'
+import type { CaptureDetail, AdjacentIds } from '../api'
+import Header from '../components/Header'
 import BodyViewer from '../components/BodyViewer'
 import MethodBadge from '../components/MethodBadge'
 import StatusBadge from '../components/StatusBadge'
 import { upstreamUrl } from '../lib/assembleUrl'
 import { parseQuery, targetQuery } from '../lib/parseQuery'
-export default function Detail(){
+export default function Detail({ auto, onAuto }: { auto: boolean; onAuto: (v: boolean) => void }){
   const {id}=useParams() as {id:string}
+  const navigate=useNavigate()
   const [d,setD]=useState<CaptureDetail | null>(null)
+  const [adj,setAdj]=useState<AdjacentIds | null>(null)
   useEffect(()=>{ getCapture(Number(id)).then(setD).catch(console.error) },[id])
-  if(!d) return <p className="muted">loading…</p>
+  useEffect(()=>{ getAdjacent(Number(id)).then(setAdj).catch(console.error) },[id])
+  // Same button styling/text as the list pager's Prev/Next (FR-039); the ends
+  // of the sequence disable. Orientation is S/N: Prev = lower id (temporally
+  // earlier), Next = higher id.
+  const navBtn='border border-[var(--border)] rounded px-2.5 py-1 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[var(--border)]'
+  const nav = adj && (
+    <>
+      <button disabled={adj.prev===null} onClick={()=>navigate(`/captures/${adj.prev}`)} className={navBtn} title="previous capture (lower id)">
+        <span className="inline-flex items-center gap-1"><svg className="w-3 h-3" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={1.5} aria-hidden="true"><path d="M7 2L3 6l4 4" strokeLinecap="round" strokeLinejoin="round"/></svg>Prev</span>
+      </button>
+      <button disabled={adj.next===null} onClick={()=>navigate(`/captures/${adj.next}`)} className={navBtn} title="next capture (higher id)">
+        <span className="inline-flex items-center gap-1">Next<svg className="w-3 h-3" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={1.5} aria-hidden="true"><path d="M5 2l4 4-4 4" strokeLinecap="round" strokeLinejoin="round"/></svg></span>
+      </button>
+    </>
+  )
+  if(!d) return (<>
+    <Header auto={auto} onAuto={onAuto} middle={nav}/>
+    <main className="px-4"><p className="muted">loading…</p></main>
+  </>)
   const reqCt = d.request_headers.find(h=>h.name==='content-type')?.value
   const respCt = d.response_headers.find(h=>h.name==='content-type')?.value
   const params = parseQuery(targetQuery(d.request_target))
@@ -27,6 +48,8 @@ export default function Detail(){
     { label: 'Response version', value: d.response_version ?? '—' },
   ]
   return (<>
+    <Header auto={auto} onAuto={onAuto} middle={nav}/>
+    <main className="px-4">
     <div className="flex justify-end mb-2">
       <a href={`/api/export/captures/${d.id}`} download
         className="border border-[var(--border)] rounded px-2.5 py-1 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors">
@@ -71,5 +94,6 @@ export default function Detail(){
         <BodyViewer view={d.response_body} contentType={respCt} id={d.id} part="response"/>
       </div>
     </div>
+    </main>
   </>)
 }
