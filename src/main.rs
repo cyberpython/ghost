@@ -7,9 +7,21 @@ use std::net::SocketAddr;
 use ghost::{db, proxy, url_join};
 
 /// Return the next 00:00:01 local time after `now`.
+///
+/// DST-safe: in zones where the transition sits at midnight, local 00:00:01
+/// may not exist (spring-forward) or may occur twice (fall-back). We pick
+/// the first occurrence when ambiguous, and fall back to the UTC instant
+/// when the local time doesn't exist at all.
 fn next_prune_time(now: chrono::DateTime<chrono::Local>) -> chrono::DateTime<chrono::Local> {
-    let tomorrow = now.date_naive() + chrono::Days::new(1);
-    tomorrow.and_hms_opt(0, 0, 1).unwrap().and_local_timezone(chrono::Local).unwrap()
+    let naive = (now.date_naive() + chrono::Days::new(1)).and_hms_opt(0, 0, 1).unwrap();
+    match naive.and_local_timezone(chrono::Local) {
+        chrono::MappedLocalTime::Single(dt) => dt,
+        chrono::MappedLocalTime::Ambiguous(dt, _) => dt,
+        chrono::MappedLocalTime::None => naive
+            .and_local_timezone(chrono::Utc)
+            .unwrap()
+            .with_timezone(&chrono::Local),
+    }
 }
 
 #[derive(Parser)]
@@ -32,7 +44,7 @@ struct Args {
     max_body_bytes: usize,
 
     /// Prune captures older than this many days (0 = disabled).
-    #[arg(long)]
+    #[arg(long, value_parser = clap::value_parser!(u64).range(0..=36500))]
     retention_days: Option<u64>,
 }
 
@@ -50,7 +62,6 @@ async fn main() -> anyhow::Result<()> {
         db: pool.clone(),
         upstream,
         max_body_bytes: args.max_body_bytes,
-        retention_days: args.retention_days,
     };
 
     // Run initial prune if retention is configured.

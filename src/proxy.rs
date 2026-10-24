@@ -54,8 +54,6 @@ pub struct State {
     /// Max bytes of a body retained for storage (the stored copy is truncated
     /// here; relaying is always in full).
     pub max_body_bytes: usize,
-    /// If non-zero, prune captures older than this many days.
-    pub retention_days: Option<u64>,
 }
 
 /// Accept-and-serve loop. Runs until the process is shutting down.

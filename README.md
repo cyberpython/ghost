@@ -37,6 +37,7 @@ ghost --listen 127.0.0.1:8080 --upstream http://127.0.0.1:9000/app --db ghost.db
 | `--upstream` | *(required)* | Fixed upstream base: `http://host[:port][/prefix]`. |
 | `--db` | `ghost.db` | SQLite file (created if missing). |
 | `--max-body-bytes` | `104857600` (100 MiB) | Cap on body bytes retained for storage. |
+| `--retention-days` | *(unset)* | Prune captures older than this many days (`0` = disabled). Runs once at startup and daily at 00:00:01 local. |
 
 Behavior:
 
@@ -50,6 +51,10 @@ Behavior:
 - Every completed exchange is one row in the `captures` table, inserted
   after the client has been fully served. A DB error is logged and never
   breaks proxying.
+- With `--retention-days N` (N > 0), captures older than N days are deleted
+  once at startup and then daily at 00:00:01 local time; a
+  `wal_checkpoint(TRUNCATE)` reclaims disk space after a non-empty delete.
+  Prune failures are logged as warnings and never break proxying.
 
 ## Transparency contract
 
