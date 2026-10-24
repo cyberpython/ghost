@@ -54,14 +54,13 @@ export default function Detail({ auto, onAuto }: { auto: boolean; onAuto: (v: bo
   return (<>
     <Header auto={auto} onAuto={onAuto} middle={nav}/>
     <main className="px-4">
-    <div className="flex justify-end mb-2">
+    {d.error && <div className="bg-[color-mix(in_srgb,var(--s-5xx)_15%,transparent)] text-[var(--s-5xx)] px-2.5 py-1.5 rounded mb-2">error: {d.error}</div>}
+    <div className="relative my-4">
       <a href={`/api/export/captures/${d.id}`} download
-        className="border border-[var(--border)] rounded px-2.5 py-1 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors">
+        className="absolute top-0 right-0 border border-[var(--border)] rounded px-2.5 py-1 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors">
         Export HAR
       </a>
-    </div>
-    {d.error && <div className="bg-[color-mix(in_srgb,var(--s-5xx)_15%,transparent)] text-[var(--s-5xx)] px-2.5 py-1.5 rounded mb-2">error: {d.error}</div>}
-    <table className="border-collapse w-full mb-4">
+    <table className="border-collapse w-full">
       <tbody>
         {infoRows.map(({label, value}) => (
           <tr key={label} className="border-b border-[var(--border)]">
@@ -71,6 +70,7 @@ export default function Detail({ auto, onAuto }: { auto: boolean; onAuto: (v: bo
         ))}
       </tbody>
     </table>
+    </div>
     <h3 className="text-lg font-semibold mb-2">Query parameters</h3>
     {params.length ? (
       <table className="border-collapse w-full table-fixed">
