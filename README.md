@@ -38,6 +38,8 @@ ghost --listen 127.0.0.1:8080 --upstream http://127.0.0.1:9000/app --db captures
 | `--db` | `captures.db` | SQLite file (created if missing). |
 | `--max-body-bytes` | `104857600` (100 MiB) | Cap on body bytes retained for storage. |
 | `--retention-days` | *(unset)* | Prune captures older than this many days (`0` = disabled). Runs once at startup and daily at 00:00:01 local. |
+| `--include-path` | *(unset)* | Record only requests whose client-side path starts with one of these plain strings (repeatable; unset = record everything). |
+| `--exclude-path` | *(unset)* | Never record requests whose path starts with one of these plain strings; exclude wins over include (repeatable). |
 
 Behavior:
 
@@ -48,6 +50,11 @@ Behavior:
   recorded (with `error` set).
 - Upstream connection/send failures become `502 Bad Gateway` to the client
   and are recorded with `error` set.
+- Path filters (`--include-path`/`--exclude-path`) gate what is *recorded*,
+  never what is relayed. Matching is a plain byte-faithful prefix match on
+  the client-side path (no boundary enforcement, no percent-decoding, no
+  case folding); exclude wins; CONNECT rows are exempt. Empty filter values
+  are rejected at startup.
 - Every completed exchange is one row in the `captures` table, inserted
   after the client has been fully served. A DB error is logged and never
   breaks proxying.

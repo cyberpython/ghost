@@ -49,13 +49,25 @@ struct Args {
 
     /// Record only requests whose client-side path starts with one of these
     /// plain strings (repeatable; absent = record everything).
-    #[arg(long)]
+    #[arg(long, value_parser = non_empty_path)]
     include_path: Vec<String>,
 
     /// Never record requests whose client-side path starts with one of these
     /// plain strings, even when an include path matches (repeatable).
-    #[arg(long)]
+    #[arg(long, value_parser = non_empty_path)]
     exclude_path: Vec<String>,
+}
+
+/// FR-027 filter values must be non-empty: an empty string is a prefix of
+/// every path, so an empty `--exclude-path` would silently disable all
+/// capture, and an empty `--include-path` would be a no-op. Values are never
+/// trimmed — matching is byte-faithful by design.
+fn non_empty_path(s: &str) -> Result<String, String> {
+    if s.is_empty() {
+        Err("path filter must not be empty (an empty exclude would match every path)".to_string())
+    } else {
+        Ok(s.to_string())
+    }
 }
 
 #[tokio::main]
@@ -125,4 +137,16 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_path_filters_are_rejected() {
+        assert!(Args::try_parse_from(["ghost", "--upstream", "http://u", "--include-path", ""]).is_err());
+        assert!(Args::try_parse_from(["ghost", "--upstream", "http://u", "--exclude-path", ""]).is_err());
+        assert!(Args::try_parse_from(["ghost", "--upstream", "http://u", "--include-path", "/a", "--exclude-path", "/b"]).is_ok());
+    }
 }

@@ -492,7 +492,7 @@ fn spawn_insert(st: &State, c: Capture) {
             }
         });
     } else {
-        debug!(target = %c.request_target, "capture skipped by path filters");
+        debug!(method = %c.request_method, target = %c.request_target, "capture skipped by path filters");
     }
 }
 
