@@ -37,6 +37,9 @@ ghost --listen 127.0.0.1:8080 --upstream http://127.0.0.1:9000/app --db captures
 | `--upstream` | *(required)* | Fixed upstream base: `http://host[:port][/prefix]`. |
 | `--db` | `captures.db` | SQLite file (created if missing). |
 | `--max-body-bytes` | `104857600` (100 MiB) | Cap on body bytes retained for storage. |
+| `--retention-days` | *(unset)* | Prune captures older than this many days (`0` = disabled). Runs once at startup and daily at 00:00:01 local. |
+| `--include-path` | *(unset)* | Record only requests whose client-side path starts with one of these plain strings (repeatable; unset = record everything). |
+| `--exclude-path` | *(unset)* | Never record requests whose path starts with one of these plain strings; exclude wins over include (repeatable). |
 
 Behavior:
 
@@ -47,9 +50,18 @@ Behavior:
   recorded (with `error` set).
 - Upstream connection/send failures become `502 Bad Gateway` to the client
   and are recorded with `error` set.
+- Path filters (`--include-path`/`--exclude-path`) gate what is *recorded*,
+  never what is relayed. Matching is a plain byte-faithful prefix match on
+  the client-side path (no boundary enforcement, no percent-decoding, no
+  case folding); exclude wins; CONNECT rows are exempt. Empty filter values
+  are rejected at startup.
 - Every completed exchange is one row in the `captures` table, inserted
   after the client has been fully served. A DB error is logged and never
   breaks proxying.
+- With `--retention-days N` (N > 0), captures older than N days are deleted
+  once at startup and then daily at 00:00:01 local time; a
+  `wal_checkpoint(TRUNCATE)` reclaims disk space after a non-empty delete.
+  Prune failures are logged as warnings and never break proxying.
 
 ## Transparency contract
 
@@ -163,6 +175,20 @@ ghost-api --db captures.db --listen 127.0.0.1:8090 --static-dir web/dist
   unmasked content.
 - `GET /api/facets` — `{methods, statuses, errors}` for filter dropdowns; `errors`
   is the count of rows with an error set, not a list of kinds.
+- `GET /api/export/captures` — the current filter set as a **HAR 1.2** log
+  (same filters as the list endpoint, `limit` defaults to 50 / max 500),
+  returned as an `application/json` attachment (`captures.har`).
+- `GET /api/export/captures/{id}` — a single capture as a HAR 1.2 log
+  (`capture-{id}.har` attachment). Unknown id → `404`.
+
+  HAR is the lingua franca of HTTP tooling: the `.har` file opens directly in
+  Chrome DevTools (Network → Import HAR) and Charles. Text bodies are inlined
+  as UTF-8 `content.text`; binary bodies are base64-encoded with
+  `encoding: "base64"` so they survive the JSON round-trip byte-for-byte.
+  Failed exchanges (no HTTP status) are emitted with `status: 0` and the
+  error as `statusText`. Note that bodies are exported exactly as stored —
+  wire-faithful — so gzip-encoded responses are base64 of the compressed
+  bytes (the viewer's decode-on-read is a separate view).
 
 ### Dev flow
 

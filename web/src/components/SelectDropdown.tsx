@@ -5,9 +5,10 @@ interface Props {
   options: { label: string; value: string }[]
   onChange: (v: string) => void
   placeholder?: string
+  className?: string
 }
 
-export default function SelectDropdown({ value, options, onChange, placeholder }: Props) {
+export default function SelectDropdown({ value, options, onChange, placeholder, className }: Props) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -22,11 +23,11 @@ export default function SelectDropdown({ value, options, onChange, placeholder }
   const selected = options.find(o => o.value === value)
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className={`relative ${className ?? ''}`}>
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="border border-[var(--border)] rounded px-2.5 py-1.5 text-sm bg-transparent text-[var(--text)] flex items-center justify-between gap-2 min-w-[120px] hover:border-[var(--accent)] transition-colors"
+        className="w-full border border-[var(--border)] rounded px-2.5 py-1.5 text-sm bg-transparent text-[var(--text)] flex items-center justify-between gap-2 hover:border-[var(--accent)] transition-colors"
       >
         <span>{selected?.label || placeholder}</span>
         <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeOpacity={0.6}>
