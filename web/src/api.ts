@@ -5,8 +5,11 @@ export type CaptureListItem = {
   id: number; created_at: string; total_ms: number; client_addr: string;
   request_method: string; request_target: string; upstream_path: string; upstream_query: string | null;
   status_code: number | null; error: string | null;
-  request_body_len: number; request_body_truncated: number;
-  response_body_len: number; response_body_truncated: number }
+  request_body_len: number; request_body_truncated: boolean;
+  response_body_len: number; response_body_truncated: boolean }
+type RawCaptureListItem = Omit<CaptureListItem,
+  'request_body_truncated' | 'response_body_truncated'>
+  & { request_body_truncated: number; response_body_truncated: number }
 export type CaptureDetail = {
   id: number; created_at: string; total_ms: number; client_addr: string;
   request_version: string; request_method: string; request_target: string;
@@ -21,8 +24,12 @@ export async function listCaptures(q: { method?: string; status?: number | null;
   const p = new URLSearchParams()
   for (const [k, v] of Object.entries(q)) if (v !== undefined) p.set(k, String(v))
   const r = await fetch(`/api/captures?${p.toString()}`)
-  const j = await r.json()
-  return { count: j.count as number, captures: j.captures as CaptureListItem[] }
+  const j = (await r.json()) as { count: number; captures: RawCaptureListItem[] }
+  return { count: j.count, captures: j.captures.map(c => ({
+    ...c,
+    request_body_truncated: c.request_body_truncated !== 0,
+    response_body_truncated: c.response_body_truncated !== 0,
+  })) }
 }
 export async function getCapture(id: number) {
   const r = await fetch(`/api/captures/${id}`)
