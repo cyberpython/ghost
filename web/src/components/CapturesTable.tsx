@@ -1,5 +1,6 @@
 import { Link, useNavigate } from 'react-router'
 import type { CaptureListItem } from '../api'
+import { formatSize } from '../lib/formatSize'
 import MethodBadge from './MethodBadge'
 import StatusBadge from './StatusBadge'
 export default function CapturesTable({ captures }: { captures: CaptureListItem[] }) {
@@ -13,6 +14,7 @@ export default function CapturesTable({ captures }: { captures: CaptureListItem[
           <th className="text-left px-2.5 py-1.5 text-sm font-medium">Target</th>
           <th className="text-left px-2.5 py-1.5 text-sm font-medium">Status</th>
           <th className="text-left px-2.5 py-1.5 text-sm font-medium">ms</th>
+          <th className="text-left px-2.5 py-1.5 text-sm font-medium" title="Request body size (stored)">Body</th>
           <th className="text-left px-2.5 py-1.5 text-sm font-medium">Client</th>
           <th className="text-left px-2.5 py-1.5 text-sm font-medium">Error</th>
         </tr>
@@ -29,6 +31,7 @@ export default function CapturesTable({ captures }: { captures: CaptureListItem[
             <td className="px-2.5 py-1.5 break-all min-w-0">{row.request_target}</td>
             <td className="px-2.5 py-1.5"><StatusBadge code={row.status_code}/></td>
             <td className="px-2.5 py-1.5">{row.total_ms}</td>
+            <td className="px-2.5 py-1.5 tabular-nums whitespace-nowrap" title={row.request_body_truncated ? 'body truncated (stored cap)' : undefined}>{formatSize(row.request_body_len)}{row.request_body_truncated ? ' *' : ''}</td>
             <td className="px-2.5 py-1.5">{row.client_addr}</td>
             <td className="px-2.5 py-1.5">{row.error ?? ''}</td>
           </tr>
