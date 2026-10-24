@@ -168,7 +168,7 @@ describe('BodyViewer', () => {
     // The decoded body flows through the normal JSON branch (pretty-printed).
     expect(container.textContent).toContain('"ok": true')
   })
-  const fb = { text: 'user=john+doe&pw=***&flag=1&flag=2', binary: false, hex_preview: null, len: 36, sha256: null, truncated: false, text_truncated: false }
+  const fb = { text: 'user=john+doe&pw=***&flag=1&flag=2', binary: false, hex_preview: null, len: 36, sha256: null, truncated: false, text_truncated: false, decoded_encoding: null }
 
   it('renders a decoded table for form-urlencoded bodies (default tab)', () => {
     const { container } = render(

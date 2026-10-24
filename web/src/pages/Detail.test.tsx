@@ -7,7 +7,7 @@ import type { CaptureDetail, AdjacentIds } from '../api'
 
 vi.mock('../api', () => ({ getCapture: vi.fn(), getAdjacent: vi.fn() }))
 
-const bd = { text: null, text_truncated: false, binary: false, hex_preview: null, len: 0, sha256: null, truncated: false }
+const bd = { text: null, text_truncated: false, binary: false, hex_preview: null, len: 0, sha256: null, truncated: false, decoded_encoding: null }
 const d = (): CaptureDetail => ({
   id: 2, created_at: 't', total_ms: 5, client_addr: 'c',
   request_version: 'HTTP/1.1', request_method: 'POST', request_target: '/a',
