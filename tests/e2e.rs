@@ -26,6 +26,8 @@ async fn origin_handle(req: Request<Incoming>) -> Res {
         .path_and_query()
         .map(|s| s.to_string())
         .unwrap_or_default();
+    // FR-003 amendment pin: was the request-target absolute-form on the wire?
+    let absolute_target = req.uri().scheme_str().is_some();
     let headers: Vec<String> = req
         .headers()
         .iter()
@@ -41,6 +43,7 @@ async fn origin_handle(req: Request<Incoming>) -> Res {
     let json = serde_json::json!({
         "method": method.to_string(),
         "target": target,
+        "absolute_target": absolute_target,
         "headers": headers,
         "body": String::from_utf8_lossy(&body).to_string(),
     });
@@ -188,6 +191,16 @@ async fn col_id(pool: &sqlx::sqlite::SqlitePool, where_clause: &str) -> i64 {
     v.unwrap()
 }
 
+async fn col_count(pool: &sqlx::sqlite::SqlitePool, where_clause: &str) -> i64 {
+    let v: i64 = sqlx::query_scalar(&format!(
+        "SELECT COUNT(*) FROM captures WHERE {where_clause}"
+    ))
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    v
+}
+
 #[tokio::test]
 async fn transparent_e2e() {
     // Origin on an ephemeral port.
@@ -209,6 +222,8 @@ async fn transparent_e2e() {
         sensitive_headers: redact::default_sensitive_headers(),
         sensitive_query_parameters: redact::default_sensitive_query_parameters(),
         sensitive_json_paths: Vec::new(),
+        include_paths: Vec::new(),
+        exclude_paths: Vec::new(),
     };
     let proxy_task = tokio::spawn(proxy::serve(proxy_listener, state));
 
@@ -237,6 +252,9 @@ async fn transparent_e2e() {
     let body_str = std::str::from_utf8(&body).unwrap();
     let echo: serde_json::Value = serde_json::from_str(body_str).unwrap();
     assert_eq!(echo["target"], "/app/endpoint/path?q=1");
+    // FR-003 amendment: the upstream receives an origin-form request-target
+    // (path?query), not the resolved absolute URI.
+    assert_eq!(echo["absolute_target"], false);
     assert_eq!(echo["method"], "POST");
     assert_eq!(echo["body"], "hello-body");
     let hdrs: Vec<String> = echo["headers"]
@@ -409,6 +427,8 @@ async fn masking_e2e() {
         sensitive_headers: redact::default_sensitive_headers(),
         sensitive_query_parameters: redact::default_sensitive_query_parameters(),
         sensitive_json_paths: Vec::new(),
+        include_paths: Vec::new(),
+        exclude_paths: Vec::new(),
     };
     let proxy_task = tokio::spawn(proxy::serve(proxy_listener, state));
 
@@ -506,6 +526,102 @@ async fn masking_e2e() {
     origin_task.abort();
 }
 
+/// FR-027: `--include-path`/`--exclude-path` gate what is *recorded*, never
+/// what is relayed — filtered requests still get byte-identical responses,
+/// exclude wins over include, and CONNECT rows are exempt from filtering.
+#[tokio::test]
+async fn path_filter_e2e() {
+    let origin_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin_port = origin_listener.local_addr().unwrap().port();
+    let origin_task = tokio::spawn(origin_serve(origin_listener));
+
+    let proxy_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_port = proxy_listener.local_addr().unwrap().port();
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("t.db");
+    let pool = db::init(db_path.to_str().unwrap()).await.unwrap();
+    let upstream = UpstreamBase::parse(&format!("http://127.0.0.1:{origin_port}/app")).unwrap();
+    let state = proxy::State {
+        db: pool.clone(),
+        upstream,
+        max_body_bytes: 100 * 1024 * 1024,
+        sensitive_headers: redact::default_sensitive_headers(),
+        sensitive_query_parameters: redact::default_sensitive_query_parameters(),
+        sensitive_json_paths: Vec::new(),
+        // Client-side paths: include "/a" (prefix, no boundary — matches
+        // "/a/deep" too); exclude "/a/secret" wins over the include match.
+        include_paths: vec!["/a".to_string()],
+        exclude_paths: vec!["/a/secret".to_string()],
+    };
+    let proxy_task = tokio::spawn(proxy::serve(proxy_listener, state));
+
+    let proxy_addr = format!("127.0.0.1:{proxy_port}");
+    wait_for_listen(&proxy_addr).await;
+
+    // Relayed GET: asserts a clean 200 even when the row is filtered out
+    // (the filters are capture-only).
+    async fn get(addr: &str, path: &str) {
+        let mut s = TcpStream::connect(addr).await.unwrap();
+        s.write_all(format!("GET {path} HTTP/1.1\r\nHost: example.client\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let raw = read_full_response(&mut s).await;
+        let (status, _, _) = parse_response(&raw);
+        assert!(status.starts_with("HTTP/1.1 200"), "got: {status}");
+    }
+
+    get(&proxy_addr, "/a").await; // recorded
+    get(&proxy_addr, "/a/deep").await; // recorded (prefix, no boundary)
+    get(&proxy_addr, "/b").await; // relayed, NOT recorded (include)
+    get(&proxy_addr, "/a/secret").await; // relayed, NOT recorded (exclude wins)
+
+    // CONNECT rows are exempt from filtering (authority-form target).
+    let mut s5 = TcpStream::connect(&proxy_addr).await.unwrap();
+    s5.write_all(b"CONNECT 10.0.0.1:80 HTTP/1.1\r\nHost: 10.0.0.1:80\r\n\r\n")
+        .await
+        .unwrap();
+    let raw5 = read_full_response(&mut s5).await;
+    let (status5, _, _) = parse_response(&raw5);
+    assert!(status5.starts_with("HTTP/1.1 405"), "got: {status5}");
+
+    // --- Let the expected inserts land, then assert the DB ----------------
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+    loop {
+        let c: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM captures")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        if c >= 3 {
+            break;
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!("timed out waiting for 3 rows (got {c})");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Grace period: give any (unexpected) extra insert a chance to land.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM captures")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(total, 3, "unexpected extra captures recorded");
+
+    // Exactly the expected rows; nothing for /b or /a/secret.
+    assert_eq!(col_count(&pool, "upstream_path='/app/a'").await, 1);
+    assert_eq!(col_count(&pool, "upstream_path='/app/a/deep'").await, 1);
+    assert_eq!(col_count(&pool, "request_method='CONNECT'").await, 1);
+    assert_eq!(
+        col_count(&pool, "upstream_path='/app/b' OR upstream_path='/app/a/secret'").await,
+        0
+    );
+
+    // Clean up.
+    proxy_task.abort();
+    origin_task.abort();
+}
+
 /// FR-011c: `--sensitive-jsonp` masks JSON values at the configured paths in
 /// the stored row (both directions) while the relay stays unmasked; a
 /// non-JSON body is a silent no-op under jsonp-only config.
@@ -533,6 +649,8 @@ async fn jsonp_e2e() {
         sensitive_headers: redact::default_sensitive_headers(),
         sensitive_query_parameters: redact::default_sensitive_query_parameters(),
         sensitive_json_paths: pats,
+        include_paths: Vec::new(),
+        exclude_paths: Vec::new(),
     };
     let proxy_task = tokio::spawn(proxy::serve(proxy_listener, state));
 

@@ -4,7 +4,7 @@ import { copyHurlFile, bytesToBase64 } from './hurl'
 
 const bv = (text: string | null): BodyView => ({
   text, text_truncated: false, binary: text === null,
-  hex_preview: null, len: 0, sha256: null, truncated: false,
+  hex_preview: null, len: 0, sha256: null, truncated: false, decoded_encoding: null,
 })
 
 const detail = (over: Partial<CaptureDetail> = {}): CaptureDetail => ({
@@ -58,20 +58,20 @@ describe('copyHurlFile', () => {
 
   it('binary stored body (not truncated) embeds via the base64 parameter', () => {
     const cmd = copyHurlFile(detail({
-      request_body: { text: null, text_truncated: false, binary: true, hex_preview: null, len: 3, sha256: null, truncated: false },
+      request_body: { text: null, text_truncated: false, binary: true, hex_preview: null, len: 3, sha256: null, truncated: false, decoded_encoding: null },
     }), 'QUJD')
     expect(cmd).toContain('base64,QUJD;')
     expect(cmd).not.toContain('```raw')
   })
 
   it('binary body without supplied bytes: safe fallback comment', () => {
-    const cmd = copyHurlFile(detail({ request_body: { text: null, text_truncated: false, binary: true, hex_preview: null, len: 4096, sha256: null, truncated: false } }))
+    const cmd = copyHurlFile(detail({ request_body: { text: null, text_truncated: false, binary: true, hex_preview: null, len: 4096, sha256: null, truncated: false, decoded_encoding: null } }))
     expect(cmd).toContain('# body not embedded: binary (4096 B)')
   })
 
   it('truncated bodies: comment with on-wire length, no data', () => {
     const cmd = copyHurlFile(detail({
-      request_body: { text: '{"pw":"***"', text_truncated: true, binary: false, hex_preview: null, len: 4096, sha256: null, truncated: true },
+      request_body: { text: '{"pw":"***"', text_truncated: true, binary: false, hex_preview: null, len: 4096, sha256: null, truncated: true, decoded_encoding: null },
     }))
     expect(cmd).not.toContain('```raw')
     expect(cmd).not.toContain('base64,')
@@ -110,5 +110,21 @@ describe('copyHurlFile', () => {
     }))
     expect(cmd).not.toContain('```')
     expect(cmd).not.toContain('# body not embedded')
+  })
+
+  it('view-decoded (gzip) bodies embed the RAW compressed bytes via base64', () => {
+    const cmd = copyHurlFile(detail({
+      request_body: { text: '{"ok":true}', text_truncated: false, binary: false, hex_preview: null, len: 40, sha256: null, truncated: false, decoded_encoding: 'gzip' },
+    }), 'H4sIAAAAAAAC')
+    expect(cmd).toContain('base64,H4sIAAAAAAAC;')
+    expect(cmd).not.toContain('```raw')
+  })
+
+  it('view-decoded body without supplied bytes: safe fallback comment', () => {
+    const cmd = copyHurlFile(detail({
+      request_body: { text: '{"ok":true}', text_truncated: false, binary: false, hex_preview: null, len: 40, sha256: null, truncated: false, decoded_encoding: 'gzip' },
+    }))
+    expect(cmd).toContain('# body not embedded')
+    expect(cmd).not.toContain('```raw')
   })
 })

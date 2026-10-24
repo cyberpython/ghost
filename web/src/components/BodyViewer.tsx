@@ -7,6 +7,8 @@ import type { BodyView } from '../api'
 import { getCapture } from '../api'
 import { copyCurlCommand } from '../lib/curl'
 import { copyHurlFile, bytesToBase64 } from '../lib/hurl'
+import JsonTree, { type Json } from './JsonTree'
+import { parseQuery } from '../lib/parseQuery'
 
 export type BodyPart = 'request' | 'response'
 
@@ -16,26 +18,44 @@ const HEX_PREVIEW_BYTES = 1024
 export default function BodyViewer({ view, contentType, id, part }:
   { view: BodyView; contentType?: string; id: number; part: BodyPart }) {
   const t = detectBodyType(contentType, view.text ?? '', view.binary)
-  const [tab, setTab] = useState<'formatted' | 'raw'>('formatted')
+  const [tab, setTab] = useState<'tree' | 'raw'>('tree')
+  // JSON parse (FR-026b), done once: it feeds the tree, Copy Formatted and
+  // the not-valid-JSON banner. jsonOk distinguishes a parse failure from a
+  // body that legitimately parses to null.
+  let json: Json = null
+  let jsonOk = false
+  if (t === 'json' && view.text !== null) {
+    try { json = JSON.parse(view.text) as Json; jsonOk = true } catch { jsonOk = false }
+  }
+  const pretty = jsonOk ? JSON.stringify(json, null, 2) : null
 
   // Copy affordance (FR-026a): Clipboard API first, execCommand fallback;
   // the label flips briefly (Copied! / Copy failed) on click.
   const [copied, setCopied] = useState<
-    'body-ok' | 'body-err' | 'curl-ok' | 'curl-err' | 'hurl-ok' | 'hurl-err' | null
+    'raw-ok' | 'raw-err' | 'fmt-ok' | 'fmt-err' | 'curl-ok' | 'curl-err' | 'hurl-ok' | 'hurl-err' | null
   >(null)
   const copyText = view.text ?? (view.hex_preview ? hexDump(view.hex_preview) : '')
   const resetLater = (k: string) =>
     setTimeout(() => setCopied(c => (c?.startsWith(k) ? null : c)), 1500)
-  const btnLabel = (k: 'body' | 'curl' | 'hurl', idle: string) =>
+  const btnLabel = (k: 'raw' | 'fmt' | 'curl' | 'hurl', idle: string) =>
     copied === `${k}-ok` ? 'Copied!' : copied === `${k}-err` ? 'Copy failed' : idle
-  const copyNow = async () => {
+  const rawNow = async () => {
     try {
       await copyToClipboard(copyText)
-      setCopied('body-ok')
+      setCopied('raw-ok')
     } catch {
-      setCopied('body-err')
+      setCopied('raw-err')
     }
-    resetLater('body')
+    resetLater('raw')
+  }
+  const fmtNow = async () => {
+    try {
+      await copyToClipboard(pretty ?? '')
+      setCopied('fmt-ok')
+    } catch {
+      setCopied('fmt-err')
+    }
+    resetLater('fmt')
   }
   const curlNow = async () => {
     try {
@@ -51,7 +71,10 @@ export default function BodyViewer({ view, contentType, id, part }:
     try {
       const d = await getCapture(id)
       let b64: string | null = null
-      if (d.request_body.text === null && d.request_body.len > 0 && !d.request_body.truncated) {
+      // A view-decoded body (FR-019) is not the wire bytes: fetch the RAW
+      // stored bytes so the base64 fence replays byte-faithfully.
+      if ((d.request_body.text === null || d.request_body.decoded_encoding !== null)
+        && d.request_body.len > 0 && !d.request_body.truncated) {
         const r = await fetch(`/api/captures/${id}/body?part=request`)
         if (!r.ok) throw new Error('http ' + r.status)
         b64 = bytesToBase64(new Uint8Array(await r.arrayBuffer()))
@@ -66,9 +89,14 @@ export default function BodyViewer({ view, contentType, id, part }:
   const btnCls = 'border border-[var(--border)] rounded px-2 py-1 text-xs bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer'
   const copyGroup = (
     <div className="flex items-center gap-2 mb-2">
-      <button type="button" onClick={copyNow} disabled={copyText.length === 0} className={btnCls}>
-        {btnLabel('body', 'Copy Body')}
+      <button type="button" onClick={rawNow} disabled={copyText.length === 0} className={btnCls}>
+        {btnLabel('raw', 'Copy Raw')}
       </button>
+      {jsonOk && (
+        <button type="button" onClick={fmtNow} className={btnCls}>
+          {btnLabel('fmt', 'Copy Formatted')}
+        </button>
+      )}
       {part === 'request' && (
         <>
           <button type="button" onClick={curlNow} className={btnCls}>
@@ -86,6 +114,9 @@ export default function BodyViewer({ view, contentType, id, part }:
   const meta = (
     <div className="muted text-sm mb-1">
       {view.len} B{view.truncated ? ' · truncated' : ''}
+      {view.decoded_encoding && (
+        <span className="ml-2 border border-[var(--border)] rounded px-1.5 py-0.5">decoded from {view.decoded_encoding}</span>
+      )}
     </div>
   )
   const shaLine = view.sha256 ? (
@@ -112,20 +143,18 @@ export default function BodyViewer({ view, contentType, id, part }:
   }
   if (t === 'json') {
     const raw = view.text as string
-    let pretty: string | null = null
-    try { pretty = JSON.stringify(JSON.parse(raw), null, 2) } catch { pretty = null }
     return (
       <>
         {meta}
         {shaLine}
         {banner}
-        {pretty === null && <div className="bg-[color-mix(in_srgb,var(--s-5xx)_15%,transparent)] text-[var(--s-5xx)] px-2.5 py-1.5 rounded mb-2">not valid JSON — showing raw</div>}
+        {!jsonOk && <div className="bg-[color-mix(in_srgb,var(--s-5xx)_15%,transparent)] text-[var(--s-5xx)] px-2.5 py-1.5 rounded mb-2">not valid JSON — showing raw</div>}
         {copyGroup}
         <div className="flex gap-2 mb-2">
-          <button onClick={() => setTab('formatted')} className={tab === 'formatted' ? 'px-3 py-1 rounded bg-[var(--panel)] border border-[var(--border)]' : 'px-3 py-1 rounded border border-[var(--border)]'}>Formatted</button>
+          {jsonOk && <button onClick={() => setTab('tree')} className={tab === 'tree' ? 'px-3 py-1 rounded bg-[var(--panel)] border border-[var(--border)]' : 'px-3 py-1 rounded border border-[var(--border)]'}>Tree</button>}
           <button onClick={() => setTab('raw')} className={tab === 'raw' ? 'px-3 py-1 rounded bg-[var(--panel)] border border-[var(--border)]' : 'px-3 py-1 rounded border border-[var(--border)]'}>Raw</button>
         </div>
-        {pretty !== null && tab === 'formatted' ? <HL lang="json" code={pretty} /> : <HL lang="json" code={raw} />}
+        {jsonOk && tab === 'tree' ? <JsonTree value={json} /> : <HL lang="json" code={raw} />}
       </>
     )
   }
@@ -138,6 +167,33 @@ export default function BodyViewer({ view, contentType, id, part }:
       <HL lang="markup" code={view.text as string} />
     </>
   )
+  if (t === 'form') {
+    // FR-026d: form bodies decode to a key/value table on the first (default)
+    // tab, mirroring JSON's Tree-first toggle. Raw shows the stored text
+    // as-is. Decoding reuses lib/parseQuery.ts (URLSearchParams semantics;
+    // duplicate keys preserved). An empty or zero-pair body falls back to raw
+    // instead of an empty table.
+    const raw = view.text as string
+    const pairs = parseQuery(raw)
+    return (
+      <>
+        {meta}
+        {shaLine}
+        {banner}
+        {copyGroup}
+        <div className="flex gap-2 mb-2">
+          {pairs.length > 0 && <button onClick={() => setTab('tree')} className={tab === 'tree' ? 'px-3 py-1 rounded bg-[var(--panel)] border border-[var(--border)]' : 'px-3 py-1 rounded border border-[var(--border)]'}>Table</button>}
+          <button onClick={() => setTab('raw')} className={tab === 'raw' ? 'px-3 py-1 rounded bg-[var(--panel)] border border-[var(--border)]' : 'px-3 py-1 rounded border border-[var(--border)]'}>Raw</button>
+        </div>
+        {tab === 'tree' && pairs.length ? (
+          <table className="border-collapse w-full table-fixed">
+            <thead><tr><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)] w-1/2">Name</th><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)]">Value</th></tr></thead>
+            <tbody>{pairs.map(([k, v], i) => <tr key={i} className="border-b border-[var(--border)]"><td className="px-2.5 py-1.5 break-all min-w-0">{k}</td><td className="px-2.5 py-1.5 break-all min-w-0">{v}</td></tr>)}</tbody>
+          </table>
+        ) : <pre className="whitespace-pre-wrap break-all">{raw}</pre>}
+      </>
+    )
+  }
   return (
     <>
       {meta}

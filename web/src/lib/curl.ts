@@ -22,8 +22,11 @@ const shq = (s: string): string => `'${s.replaceAll("'", `'\\''`)}'`
 // - A text body is embedded as `--data-binary`; binary/truncated bodies get
 //   a bash comment instead (they cannot be inlined losslessly).
 export function copyCurlCommand(d: CaptureDetail): string {
-  const body = d.request_body?.text ?? null
-  const hasBody = !!body
+  const reqBody = d.request_body
+  // A view-decoded body (FR-019) is not the wire bytes: never embed it — it
+  // falls to the same `#` comment as binary/truncated (faithful replay).
+  const body = reqBody?.decoded_encoding == null ? (reqBody?.text ?? null) : null
+  const hasBody = !!body || (!!reqBody && reqBody.len > 0)
   const hostHeader = d.request_headers.find(h => h.name.toLowerCase() === 'host')?.value
   const authority = hostHeader || window.location.host
   const lines: string[] = []

@@ -137,8 +137,74 @@ fn normalize_status(raw: Option<&str>) -> (Option<&str>, bool) {
 
 // ── Body view helper ────────────────────────────────────────────────────────
 
-fn body_view(bytes: Option<Vec<u8>>, truncated: i64, sha: Option<String>) -> Value {
-    let bytes = bytes.unwrap_or_default();
+// ── Decode-on-read (FR-019) ────────────────────────────────────────────
+
+/// Bounded inflate for the *view* only: stored bytes stay compressed on
+/// disk (FR-004/FR-010 semantics); the decoded result never exceeds this
+/// cap, so a decompression bomb falls back to the raw view instead of
+/// exploding RAM. View-path only — there is no decode-on-write.
+const MAX_DECODE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Inflate `bytes` for the view. Accepts a single `gzip`/`deflate` coding
+/// (`deflate` = zlib per RFC 9110, with a raw-deflate retry since some
+/// servers emit that); anything else — multi-coding lists, `br`, unknown —
+/// is a silent no-op: the raw view, exactly as before this FR.
+fn decode_body_view(bytes: &[u8], encoding: &str) -> Option<(Vec<u8>, &'static str)> {
+    let enc = encoding.trim().to_ascii_lowercase();
+    if enc.contains(',') {
+        return None;
+    }
+    match enc.as_str() {
+        "gzip" => {
+            bounded_inflate(&mut flate2::read::MultiGzDecoder::new(bytes)).map(|b| (b, "gzip"))
+        }
+        "deflate" => bounded_inflate(&mut flate2::read::ZlibDecoder::new(bytes))
+            .or_else(|| bounded_inflate(&mut flate2::read::DeflateDecoder::new(bytes)))
+            .map(|b| (b, "deflate")),
+        _ => None,
+    }
+}
+
+fn bounded_inflate<R: std::io::Read>(r: &mut R) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    let mut out = Vec::new();
+    r.take((MAX_DECODE_BYTES + 1) as u64)
+        .read_to_end(&mut out)
+        .ok()?;
+    if out.len() > MAX_DECODE_BYTES {
+        return None;
+    }
+    Some(out)
+}
+
+/// Pull the first value of a header out of the stored `[{name,value}]` JSON.
+fn header_value(headers_json: &str, name: &str) -> Option<String> {
+    let arr = serde_json::from_str::<Value>(headers_json).ok()?;
+    arr.as_array()?
+        .iter()
+        .find(|h| {
+            h.get("name")
+                .and_then(|v| v.as_str())
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        })
+        .and_then(|h| h.get("value").and_then(|v| v.as_str()))
+        .map(|s| s.to_string())
+}
+
+fn body_view(
+    bytes: Option<Vec<u8>>,
+    truncated: i64,
+    sha: Option<String>,
+    encoding: Option<&str>,
+) -> Value {
+    let raw = bytes.unwrap_or_default();
+    let (bytes, decoded_via) = match encoding {
+        Some(e) => match decode_body_view(&raw, e) {
+            Some((b, enc)) => (b, Some(enc)),
+            None => (raw, None),
+        },
+        None => (raw, None),
+    };
     let stored_len = bytes.len() as i64;
     let is_utf8 = std::str::from_utf8(&bytes).is_ok();
     let too_big = stored_len > 1024 * 1024;
@@ -167,18 +233,16 @@ fn body_view(bytes: Option<Vec<u8>>, truncated: i64, sha: Option<String>) -> Val
         "len": stored_len,
         "sha256": sha,
         "truncated": truncated == 1,
+        "decoded_encoding": decoded_via,
     })
 }
 
 // ── Handlers ────────────────────────────────────────────────────────────────
 
-async fn list(
-    State(pool): State<sqlx::sqlite::SqlitePool>,
-    Query(q): Query<ListQuery>,
-) -> R {
-    let limit = q.limit.unwrap_or(50).min(500);
-    let offset = q.offset.unwrap_or(0);
-
+/// Build the WHERE clause for the list filters. Shared by the JSON list
+/// endpoint and the HAR export so both always agree on what "the current
+/// filter set" means.
+fn where_sql(q: &ListQuery) -> String {
     // Normalize status filter: "ERR"/"err"/"error" → match NULL status_code
     let (status_raw, is_err) = normalize_status(q.status.as_deref());
 
@@ -211,7 +275,7 @@ async fn list(
         format!("instr(LOWER(error), '{}') > 0", e_lower)
     });
 
-    let where_sql = [
+    [
         method_filter.as_deref(),
         Some(status_filter.as_str()),
         path_filter.as_deref(),
@@ -223,13 +287,16 @@ async fn list(
     .iter()
     .filter_map(|x| *x)
     .collect::<Vec<_>>()
-    .join("\n  AND ");
+    .join("\n  AND ")
+}
 
-    let where_sql = if where_sql.is_empty() {
-        "1=1".into()
-    } else {
-        where_sql
-    };
+async fn list(
+    State(pool): State<sqlx::sqlite::SqlitePool>,
+    Query(q): Query<ListQuery>,
+) -> R {
+    let limit = q.limit.unwrap_or(50).min(500);
+    let offset = q.offset.unwrap_or(0);
+    let where_sql = where_sql(&q);
 
     let count_sql = format!("SELECT COUNT(*) FROM captures WHERE {}", where_sql);
     let count: i64 = sqlx::query_scalar(&count_sql)
@@ -293,6 +360,8 @@ async fn detail(
     let response_headers =
         serde_json::from_str::<Value>(&row.response_headers)
             .unwrap_or(Value::Array(vec![]));
+    let req_encoding = header_value(&row.request_headers, "content-encoding");
+    let resp_encoding = header_value(&row.response_headers, "content-encoding");
 
     Ok(Json(json!({
         "id": row.id,
@@ -307,6 +376,7 @@ async fn detail(
             row.request_body,
             row.request_body_truncated,
             row.request_body_sha256,
+            req_encoding.as_deref(),
         ),
         "upstream_scheme": row.upstream_scheme,
         "upstream_authority": row.upstream_authority,
@@ -319,9 +389,80 @@ async fn detail(
             row.response_body,
             row.response_body_truncated,
             row.response_body_sha256,
+            resp_encoding.as_deref(),
         ),
         "error": row.error,
     })))
+}
+
+// ── HAR 1.2 export ──────────────────────────────────────────────────────────
+
+/// Export the current filter set as a HAR 1.2 log (attachment download).
+async fn har_list(
+    State(pool): State<sqlx::sqlite::SqlitePool>,
+    Query(q): Query<ListQuery>,
+) -> Result<Response, StatusCode> {
+    let limit = q.limit.unwrap_or(50).min(500);
+    let offset = q.offset.unwrap_or(0);
+    let where_sql = where_sql(&q);
+
+    let rows_sql = format!(
+        "SELECT * FROM captures WHERE {} ORDER BY id DESC LIMIT ? OFFSET ?",
+        where_sql
+    );
+    let rows: Vec<CaptureRow> = sqlx::query_as(&rows_sql)
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let log = crate::har::build_log(&rows);
+    let body = serde_json::to_vec(&log).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut res = (
+        StatusCode::OK,
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        )],
+        body,
+    )
+        .into_response();
+    res.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_static(r#"attachment; filename="captures.har""#),
+    );
+    Ok(res)
+}
+
+/// Export a single capture as a HAR 1.2 log (attachment download).
+async fn har_detail(
+    Path(id): Path<u64>,
+    State(pool): State<sqlx::sqlite::SqlitePool>,
+) -> Result<Response, StatusCode> {
+    let row: CaptureRow = sqlx::query_as("SELECT * FROM captures WHERE id = ?")
+        .bind(id as i64)
+        .fetch_one(&pool)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+
+    let log = crate::har::build_log(std::slice::from_ref(&row));
+    let body = serde_json::to_vec(&log).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut res = (
+        StatusCode::OK,
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        )],
+        body,
+    )
+        .into_response();
+    res.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&format!(r#"attachment; filename="capture-{id}.har""#))
+            .expect("valid content-disposition"),
+    );
+    Ok(res)
 }
 
 // Raw stored body bytes (for downloading binary bodies the SPA can't render).
@@ -374,6 +515,29 @@ async fn raw_body(
     Ok(res)
 }
 
+// S/N adjacency for the detail view's Prev/Next (FR-039): the nearest lower
+// and higher capture ids, resolved — never assumed id±1, gaps are expected
+// (retention pruning, path filters, insert failures). Lenient for unknown ids
+// (deep links): the nearest existing neighbors still come back; ends → null.
+async fn adjacent(
+    Path(id): Path<u64>,
+    State(pool): State<sqlx::sqlite::SqlitePool>,
+) -> R {
+    let prev: Option<i64> =
+        sqlx::query_scalar("SELECT MAX(id) FROM captures WHERE id < ?")
+            .bind(id as i64)
+            .fetch_one(&pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let next: Option<i64> =
+        sqlx::query_scalar("SELECT MIN(id) FROM captures WHERE id > ?")
+            .bind(id as i64)
+            .fetch_one(&pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(json!({ "prev": prev, "next": next })))
+}
+
 async fn facets(
     State(pool): State<sqlx::sqlite::SqlitePool>,
 ) -> R {
@@ -413,6 +577,9 @@ pub fn build_router(pool: sqlx::sqlite::SqlitePool, static_dir: &StdPath) -> Rou
         .route("/api/captures", get(list))
         .route("/api/captures/{id}", get(detail))
         .route("/api/captures/{id}/body", get(raw_body))
+        .route("/api/export/captures", get(har_list))
+        .route("/api/export/captures/{id}", get(har_detail))
+        .route("/api/captures/{id}/adjacent", get(adjacent))
         .route("/api/facets", get(facets))
         .with_state(pool);
     if static_dir.exists() {

@@ -132,6 +132,20 @@ fn make_row(
     }
 }
 
+fn gzip(b: &[u8]) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    e.write_all(b).unwrap();
+    e.finish().unwrap()
+}
+
+fn zlib(b: &[u8]) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    e.write_all(b).unwrap();
+    e.finish().unwrap()
+}
+
 // ── Raw-GET helper ──────────────────────────────────────────────────────────
 
 async fn get(port: u16, target: &str) -> (String, String) {
@@ -454,6 +468,259 @@ async fn api_integration() {
         assert_eq!(j["errors"], 2);
     }
 
+    // ── HAR export ────────────────────────────────────────────────────────
+
+    // Single capture: /api/export/captures/1
+    {
+        let (sl, hs, body) = get_raw(port, "/api/export/captures/1").await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        assert_eq!(
+            hdr(&hs, "content-type"),
+            Some("application/json")
+        );
+        assert!(hdr(&hs, "content-disposition")
+            .unwrap()
+            .contains(r#"attachment; filename="capture-1.har""#));
+        let j: Value = serde_json::from_slice(&body).unwrap();
+        // HAR 1.2 wraps everything in a top-level `log` object.
+        assert_eq!(j["log"]["version"], "1.2");
+        assert_eq!(j["log"]["creator"]["name"], "ghost");
+        assert_eq!(j["log"]["entries"].as_array().unwrap().len(), 1);
+        let e = &j["log"]["entries"][0];
+        assert_eq!(e["startedDateTime"], "2024-01-01T00:00:00Z");
+        assert_eq!(e["request"]["method"], "GET");
+        assert_eq!(e["request"]["url"], "http://127.0.0.1:1/app/a");
+        assert_eq!(e["request"]["httpVersion"], "HTTP/1.1");
+        // Text request body inlined as UTF-8 text (no base64).
+        assert_eq!(e["request"]["postData"]["text"], "{\"k\":1}");
+        assert!(e["request"]["postData"].get("encoding").is_none());
+        // Response: status, statusText, text body.
+        assert_eq!(e["response"]["status"], 200);
+        assert_eq!(e["response"]["statusText"], "OK");
+        assert_eq!(e["response"]["content"]["text"], "{\"ok\":true}");
+        assert_eq!(e["response"]["content"]["mimeType"], "application/json");
+        // Headers pass through as [{name, value}].
+        let hdrs = e["request"]["headers"].as_array().unwrap();
+        let names: Vec<&str> = hdrs.iter().map(|h| h["name"].as_str().unwrap()).collect();
+        assert_eq!(names, vec!["host", "x-dup", "x-dup"]);
+        assert!(e.get("error").is_none());
+        assert!(e["response"].get("_error").is_none());
+    }
+
+    // Binary request body round-trips base64: [0xFF, 0xFE, 0x00, 0x01] → "//4AAQ==".
+    {
+        let (_, _, body) = get_raw(port, "/api/export/captures/3").await;
+        let j: Value = serde_json::from_slice(&body).unwrap();
+        let e = &j["log"]["entries"][0];
+        assert_eq!(e["request"]["postData"]["text"], "//4AAQ==");
+        assert_eq!(e["request"]["postData"]["encoding"], "base64");
+        // Failed exchange: no status → 0, error as statusText.
+        assert_eq!(e["response"]["status"], 0);
+        assert_eq!(e["response"]["statusText"], "boom");
+        assert_eq!(e["response"]["_error"], "boom");
+        assert_eq!(e["response"]["headers"].as_array().unwrap().len(), 0);
+        assert_eq!(e["timings"]["wait"], -1);
+        assert_eq!(e["comment"], "boom");
+    }
+
+    // Filter set: method=GET → ids 5, 2, 1 (same order as /api/captures).
+    {
+        let (sl, hs, body) = get_raw(port, "/api/export/captures?method=GET").await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        assert!(hdr(&hs, "content-disposition")
+            .unwrap()
+            .contains(r#"attachment; filename="captures.har""#));
+        let j: Value = serde_json::from_slice(&body).unwrap();
+        let urls: Vec<&str> = j["log"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["request"]["url"].as_str().unwrap())
+            .collect();
+        assert_eq!(urls, vec![
+            "http://127.0.0.1:1/app/a",
+            "http://127.0.0.1:1/app/b",
+            "http://127.0.0.1:1/app/a",
+        ]);
+    }
+
+    // Unknown capture → 404.
+    {
+        let (sl, _, _) = get_raw(port, "/api/export/captures/9999").await;
+        assert!(sl.starts_with("HTTP/1.1 404"));
+    }
+
+    // ── Adjacency (FR-039) ──────────────────────────────────────────────
+
+    // Middle id: both neighbors resolved.
+    {
+        let (sl, body) = get(port, "/api/captures/3/adjacent").await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["prev"], 2);
+        assert_eq!(j["next"], 4);
+    }
+    // First id: prev is null.
+    {
+        let (sl, body) = get(port, "/api/captures/1/adjacent").await;
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["prev"], Value::Null);
+        assert_eq!(j["next"], 2);
+    }
+    // Last id: next is null.
+    {
+        let (sl, body) = get(port, "/api/captures/5/adjacent").await;
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["prev"], 4);
+        assert_eq!(j["next"], Value::Null);
+    }
+    // Unknown id: lenient — nearest existing neighbors, no 404.
+    {
+        let (sl, body) = get(port, "/api/captures/9999/adjacent").await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["prev"], 5);
+        assert_eq!(j["next"], Value::Null);
+    }
+
     // ── Cleanup ────────────────────────────────────────────────────────────
+    srv.abort();
+}
+
+/// FR-019 decode-on-read: the view (and only the view) inflates a single
+/// gzip/deflate coding; stored bytes and the raw body endpoint stay
+/// compressed; bombs and garbage fall back to the raw view silently.
+#[tokio::test]
+async fn decode_on_read() {
+    let temp = tempfile::tempdir().unwrap();
+    let dbpath = temp.path().join("t.db");
+    let dbstr = dbpath.to_str().unwrap();
+    let pool = db::init(dbstr).await.unwrap();
+
+    // id=1: gzip on both sides of the exchange.
+    let gz_req = gzip(b"{\"gz\":true}");
+    let gz_resp = gzip(b"{\"ok\":2}");
+    let mut r1 = make_row(
+        "POST",
+        Some(200),
+        "/gz",
+        "10.0.0.9",
+        "2024-01-06T00:00:00Z",
+        Some(gz_req.clone()),
+        Some(gz_resp),
+        None,
+    );
+    r1.request_headers = serde_json::json!([
+        {"name": "host", "value": "example.org"},
+        {"name": "content-encoding", "value": "gzip"},
+        {"name": "content-type", "value": "application/json"},
+    ])
+    .to_string();
+    r1.response_headers = serde_json::json!([
+        {"name": "content-encoding", "value": "gzip"},
+        {"name": "content-type", "value": "application/json"},
+    ])
+    .to_string();
+    db::insert(&pool, &r1).await.unwrap();
+
+    // id=2: lying header — binary garbage with content-encoding: gzip.
+    let mut r2 = make_row(
+        "POST",
+        Some(200),
+        "/corrupt",
+        "10.0.0.9",
+        "2024-01-06T00:00:01Z",
+        Some(vec![0xff, 0x00, 0x01, 0x8b]),
+        None,
+        None,
+    );
+    r2.request_headers = serde_json::json!([
+        {"name": "content-encoding", "value": "gzip"},
+    ])
+    .to_string();
+    db::insert(&pool, &r2).await.unwrap();
+
+    // id=3: multi-coding list → outside the accepted subset → raw view.
+    let mut r3 = make_row(
+        "POST",
+        Some(200),
+        "/multi",
+        "10.0.0.9",
+        "2024-01-06T00:00:02Z",
+        Some(gzip(b"[1,2]")),
+        None,
+        None,
+    );
+    r3.request_headers = serde_json::json!([
+        {"name": "content-encoding", "value": "gzip, br"},
+    ])
+    .to_string();
+    db::insert(&pool, &r3).await.unwrap();
+
+    // id=4: decompression bomb — deflate expanding past the 8 MiB view cap.
+    let mut r4 = make_row(
+        "POST",
+        Some(200),
+        "/bomb",
+        "10.0.0.9",
+        "2024-01-06T00:00:03Z",
+        Some(zlib(&vec![0u8; 9 * 1024 * 1024])),
+        None,
+        None,
+    );
+    r4.request_headers = serde_json::json!([
+        {"name": "content-encoding", "value": "deflate"},
+    ])
+    .to_string();
+    db::insert(&pool, &r4).await.unwrap();
+
+    let listen = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listen.local_addr().unwrap().port();
+    let router = api::build_router(
+        api::open_read_only(dbstr).await.unwrap(),
+        &temp.path().join("nope"),
+    );
+    let srv = tokio::spawn(async move {
+        axum::serve(listen, router).await.unwrap();
+    });
+
+    // id=1: both sides decoded, JSON detected, decoded lengths reported.
+    {
+        let (_, body) = get(port, "/api/captures/1").await;
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["request_body"]["text"], "{\"gz\":true}");
+        assert_eq!(j["request_body"]["decoded_encoding"], "gzip");
+        assert_eq!(j["request_body"]["len"], 11);
+        assert_eq!(j["response_body"]["text"], "{\"ok\":2}");
+        assert_eq!(j["response_body"]["decoded_encoding"], "gzip");
+    }
+    // Raw endpoint: still the compressed wire bytes.
+    {
+        let (_, _, body) = get_raw(port, "/api/captures/1/body?part=request").await;
+        assert_eq!(body, gz_req);
+    }
+    // id=2 corrupt: silent raw fallback (binary view, no decode claim).
+    {
+        let (_, body) = get(port, "/api/captures/2").await;
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["request_body"]["text"], Value::Null);
+        assert_eq!(j["request_body"]["binary"], true);
+        assert_eq!(j["request_body"]["decoded_encoding"], Value::Null);
+    }
+    // id=3 multi-coding: raw fallback.
+    {
+        let (_, body) = get(port, "/api/captures/3").await;
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["request_body"]["decoded_encoding"], Value::Null);
+        assert_eq!(j["request_body"]["binary"], true);
+    }
+    // id=4 bomb: over-cap → raw fallback, view stays cheap.
+    {
+        let (_, body) = get(port, "/api/captures/4").await;
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["request_body"]["decoded_encoding"], Value::Null);
+        assert_eq!(j["request_body"]["binary"], true);
+    }
+
     srv.abort();
 }

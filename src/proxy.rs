@@ -28,7 +28,7 @@
 
 use bytes::Bytes;
 use http::header::{CONTENT_LENGTH, CONTENT_TYPE, HOST};
-use http::{HeaderMap, HeaderValue, Method, Version};
+use http::{HeaderMap, HeaderValue, Method, Uri, Version};
 use http_body_util::{BodyExt, Full, LengthLimitError, Limited, combinators::BoxBody};
 use hyper::StatusCode;
 use hyper::body::Incoming;
@@ -65,6 +65,12 @@ pub struct State {
     /// switches from key-name matching to these paths. Parsed at startup so
     /// malformed syntax fails fast; request time only ever sees valid paths.
     pub sensitive_json_paths: Vec<redact::JsonPath>,
+    /// FR-027 sampling: only requests whose client-side path starts with one
+    /// of these strings are recorded (empty list = record everything).
+    pub include_paths: Vec<String>,
+    /// FR-027 sampling: requests whose client-side path starts with one of
+    /// these strings are never recorded (exclude wins over `include_paths`).
+    pub exclude_paths: Vec<String>,
 }
 
 /// Accept-and-serve loop. Runs until the process is shutting down.
@@ -137,7 +143,7 @@ async fn proxy(
             0,
             Some("CONNECT rejected (HTTP-only proxy)".into()),
         );
-        spawn_insert(st.db.clone(), cap);
+        spawn_insert(&st, cap);
         return Ok(resp);
     }
 
@@ -176,7 +182,7 @@ async fn proxy(
                 0,
                 Some(format!("{msg} (rejected)")),
             );
-            spawn_insert(st.db.clone(), cap);
+            spawn_insert(&st, cap);
             return Ok(resp);
         }
     };
@@ -185,7 +191,19 @@ async fn proxy(
     // except framing, body bytes identical.
     let mut up_req = Request::new(Full::new(req_bytes.clone()));
     *up_req.method_mut() = method.clone();
-    *up_req.uri_mut() = up_uri;
+    // FR-003 amendment: the request-target goes on the wire in **origin-form**
+    // (`/path?query`) — the client's form, modulo the remap onto the upstream
+    // prefix. The resolved absolute URI is RFC 9112-legal but surprising for
+    // origins (Node surfaces it verbatim, strict servers may reject);
+    // targets that cannot be expressed as origin-form fall back to it.
+    let pq = match up_query.as_deref() {
+        Some(q) => format!("{up_path}?{q}"),
+        None => up_path.clone(),
+    };
+    *up_req.uri_mut() = match pq.parse::<Uri>() {
+        Ok(u) => u,
+        Err(_) => up_uri,
+    };
     {
         let h = up_req.headers_mut();
         for (name, value) in client_headers.iter() {
@@ -344,7 +362,7 @@ async fn proxy(
         resp_trunc,
         None,
     );
-    spawn_insert(st.db.clone(), cap);
+    spawn_insert(&st, cap);
 
     Ok(client_resp)
 }
@@ -389,7 +407,7 @@ fn bad_gateway(
         0,
         Some(msg),
     );
-    spawn_insert(st.db.clone(), cap);
+    spawn_insert(st, cap);
     Ok(resp)
 }
 
@@ -478,13 +496,38 @@ fn build_capture(
     }
 }
 
-fn spawn_insert(db: sqlx::sqlite::SqlitePool, c: Capture) {
-    tokio::task::spawn(async move {
-        match db::insert(&db, &c).await {
-            Ok(id) => debug!("stored capture id={id}"),
-            Err(e) => error!("failed to store capture: {e}"),
-        }
-    });
+/// Record a capture unless the FR-027 path filters veto it.
+///
+/// Matching runs on the client-side request-target path — the stored
+/// `request_target` keeps the path byte-identical (only its query parameters
+/// are masked), so it is the path exactly as received, before remapping.
+/// CONNECT rows are exempt: their target is authority-form (`host:port`),
+/// which has no path to match against.
+fn spawn_insert(st: &State, c: Capture) {
+    let exempt = c.request_method.eq_ignore_ascii_case("CONNECT");
+    let (path, _) = split_target(&c.request_target);
+    if exempt || should_capture(&st.include_paths, &st.exclude_paths, path) {
+        let db = st.db.clone();
+        tokio::task::spawn(async move {
+            match db::insert(&db, &c).await {
+                Ok(id) => debug!("stored capture id={id}"),
+                Err(e) => error!("failed to store capture: {e}"),
+            }
+        });
+    } else {
+        debug!(method = %c.request_method, target = %c.request_target, "capture skipped by path filters");
+    }
+}
+
+/// FR-027 capture decision: plain string-prefix matching on the path, with
+/// no boundary enforcement, no percent-decoding and no case folding
+/// (deliberately blunt; see docs). Exclude wins; a non-empty include list
+/// requires a match; both lists empty → record everything (the default).
+fn should_capture(include: &[String], exclude: &[String], path: &str) -> bool {
+    if exclude.iter().any(|p| path.starts_with(p.as_str())) {
+        return false;
+    }
+    include.is_empty() || include.iter().any(|p| path.starts_with(p.as_str()))
 }
 
 /// Serialise (name, value) pairs as a JSON array of `{"name","value"}`.
@@ -529,4 +572,47 @@ fn full_err<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, hyper::Error> {
     Full::new(chunk.into())
         .map_err(|never| match never {})
         .boxed()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn should_capture_defaults() {
+        assert!(should_capture(&[], &[], "/anything"));
+        assert!(should_capture(&[], &[], "/"));
+        assert!(should_capture(&[], &[], ""));
+    }
+
+    #[test]
+    fn should_capture_prefix_no_boundary() {
+        let inc = vec!["/one/two".to_string(), "/three".to_string()];
+        // Agreed examples: prefix match with no boundary enforcement.
+        assert!(should_capture(&inc, &[], "/one/two/four"));
+        assert!(should_capture(&inc, &[], "/threeeeee"));
+        assert!(!should_capture(&inc, &[], "/two"));
+        assert!(!should_capture(&inc, &[], "/one/tw"));
+        assert!(should_capture(&inc, &[], "/one/two"));
+        assert!(should_capture(&inc, &[], "/three"));
+    }
+
+    #[test]
+    fn should_capture_exclude_wins() {
+        let inc = vec!["/one".to_string()];
+        let exc = vec!["/one/two".to_string()];
+        assert!(should_capture(&inc, &exc, "/one/three"));
+        assert!(!should_capture(&inc, &exc, "/one/two"));
+        // Exclude applies even when no include list exists.
+        assert!(!should_capture(&[], &["/health".to_string()], "/health/live"));
+        assert!(should_capture(&[], &["/health".to_string()], "/api/x"));
+    }
+
+    #[test]
+    fn should_capture_raw_bytes_no_decoding() {
+        // No case folding, no percent-decoding: raw bytes only.
+        assert!(!should_capture(&["/A".to_string()], &[], "/a"));
+        assert!(!should_capture(&["/a b".to_string()], &[], "/a%20b"));
+        assert!(should_capture(&["/a%20b".to_string()], &[], "/a%20b"));
+    }
 }
