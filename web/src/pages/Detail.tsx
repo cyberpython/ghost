@@ -60,11 +60,11 @@ export default function Detail({ auto, onAuto }: { auto: boolean; onAuto: (v: bo
         className="absolute top-0 right-0 border border-[var(--border)] rounded px-2.5 py-1 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors">
         Export HAR
       </a>
-    <table className="border-collapse w-full">
+    <table className="border-collapse w-full table-fixed">
       <tbody>
         {infoRows.map(({label, value}) => (
           <tr key={label} className="border-b border-[var(--border)]">
-            <td className="text-[var(--muted)] px-2.5 py-1.5 align-top whitespace-nowrap">{label}</td>
+            <td className="text-[var(--muted)] px-2.5 py-1.5 align-top whitespace-nowrap w-1/2">{label}</td>
             <td className="px-2.5 py-1.5 break-all min-w-0">{value}</td>
           </tr>
         ))}
@@ -82,7 +82,7 @@ export default function Detail({ auto, onAuto }: { auto: boolean; onAuto: (v: bo
       <div>
         <h3 className="text-lg font-semibold mb-2 mt-4">Request headers</h3>
         <table className="border-collapse w-full table-fixed">
-          <thead><tr><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)] w-1/3">Name</th><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)]">Value</th></tr></thead>
+          <thead><tr><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)] w-1/2">Name</th><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)]">Value</th></tr></thead>
           <tbody>{d.request_headers.map((h,i)=><tr key={i} className="border-b border-[var(--border)]"><td className="px-2.5 py-1.5 break-all min-w-0">{h.name}</td><td className="px-2.5 py-1.5 break-all min-w-0">{h.value}</td></tr>)}</tbody>
         </table>
         <h3 className="text-lg font-semibold mb-2 mt-4">Request body</h3>
@@ -91,7 +91,7 @@ export default function Detail({ auto, onAuto }: { auto: boolean; onAuto: (v: bo
       <div>
         <h3 className="text-lg font-semibold mb-2 mt-4">Response headers</h3>
         <table className="border-collapse w-full table-fixed">
-          <thead><tr><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)] w-1/3">Name</th><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)]">Value</th></tr></thead>
+          <thead><tr><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)] w-1/2">Name</th><th className="text-left px-2.5 py-1.5 border-b border-[var(--border)]">Value</th></tr></thead>
           <tbody>{d.response_headers.map((h,i)=><tr key={i} className="border-b border-[var(--border)]"><td className="px-2.5 py-1.5 break-all min-w-0">{h.name}</td><td className="px-2.5 py-1.5 break-all min-w-0">{h.value}</td></tr>)}</tbody>
         </table>
         <h3 className="text-lg font-semibold mb-2 mt-4">Response body</h3>
