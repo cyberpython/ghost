@@ -27,6 +27,8 @@ const hesc = (s: string): string =>
 //   trimming it before splitting;
 // - text containing the fence itself → `base64,` of the UTF-8 bytes (exact);
 // - binary stored body (fetch supplies `binaryB64`) → `base64,…;` byte-exact;
+// - view-decoded body (FR-019) → same as binary: `base64,…;` of the RAW
+//   stored bytes, so replay stays byte-faithful (never the decoded text);
 // - truncated body → comment only (the full on-wire body is not available).
 export function copyHurlFile(d: CaptureDetail, binaryB64?: string | null): string {
   const body = d.request_body
@@ -40,7 +42,7 @@ export function copyHurlFile(d: CaptureDetail, binaryB64?: string | null): strin
     if (n === 'host' || n === 'content-length' || n === 'transfer-encoding') continue
     lines.push(`${h.name}: ${hesc(h.value)}`)
   }
-  if (body && body.text !== null && !body.truncated && body.text.length > 0) {
+  if (body && body.text !== null && !body.truncated && body.decoded_encoding === null && body.text.length > 0) {
     if (body.text.includes('```')) {
       lines.push(`base64,${bytesToBase64(new TextEncoder().encode(body.text))};`)
     } else {

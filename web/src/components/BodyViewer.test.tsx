@@ -10,7 +10,7 @@ vi.mock('../api', () => ({ getCapture: vi.fn() }))
 
 const bd = (over: Partial<BodyView> = {}): BodyView => ({
   text: null, text_truncated: false, binary: false, hex_preview: null,
-  len: 0, sha256: null, truncated: false, ...over,
+  len: 0, sha256: null, truncated: false, decoded_encoding: null, ...over,
 })
 const detail: CaptureDetail = {
   id: 5, created_at: 't', total_ms: 5, client_addr: 'c',
@@ -25,11 +25,11 @@ const detail: CaptureDetail = {
   upstream_query: 'a=1', response_version: null, status_code: null,
   response_headers: [], response_body: bd(), error: null,
 }
-const jb = { text: '{"a":1}', binary: false, hex_preview: null, len: 5, sha256: null, truncated: false, text_truncated: false }
-const xb = { text: '<?xml version="1.0"?><root>hi</root>', binary: false, hex_preview: null, len: 0, sha256: null, truncated: false, text_truncated: false }
-const bin = { text: null, binary: true, hex_preview: 'ff fe 00 41 42', len: 2048, sha256: null, truncated: true, text_truncated: false }
-const binSmall = { text: null, binary: true, hex_preview: 'ff fe 00 41 42', len: 5, sha256: null, truncated: false, text_truncated: false }
-const badJson = { text: '{"a":1', binary: false, hex_preview: null, len: 6, sha256: null, truncated: true, text_truncated: true }
+const jb = { text: '{"a":1}', binary: false, hex_preview: null, len: 5, sha256: null, truncated: false, text_truncated: false, decoded_encoding: null }
+const xb = { text: '<?xml version="1.0"?><root>hi</root>', binary: false, hex_preview: null, len: 0, sha256: null, truncated: false, text_truncated: false, decoded_encoding: null }
+const bin = { text: null, binary: true, hex_preview: 'ff fe 00 41 42', len: 2048, sha256: null, truncated: true, text_truncated: false, decoded_encoding: null }
+const binSmall = { text: null, binary: true, hex_preview: 'ff fe 00 41 42', len: 5, sha256: null, truncated: false, text_truncated: false, decoded_encoding: null }
+const badJson = { text: '{"a":1', binary: false, hex_preview: null, len: 6, sha256: null, truncated: true, text_truncated: true, decoded_encoding: null }
 describe('BodyViewer', () => {
   it('renders the JSON tree by default (Tree is the first tab)', () => {
     const { container } = render(<BodyViewer view={jb} id={1} part="response" />)
@@ -160,6 +160,14 @@ describe('BodyViewer', () => {
     await waitFor(() => expect(container.textContent).toContain('Copy failed'))
   })
 
+  it('shows the decoded-from badge on view-decoded bodies', () => {
+    const gz = bd({ text: '{"ok":true}', len: 9, decoded_encoding: 'gzip' })
+    const { container, queryByText } = render(
+      <BodyViewer view={gz} id={1} part="response" contentType="application/json" />)
+    expect(queryByText('decoded from gzip')).not.toBeNull()
+    // The decoded body flows through the normal JSON branch (pretty-printed).
+    expect(container.textContent).toContain('"ok": true')
+  })
   const fb = { text: 'user=john+doe&pw=***&flag=1&flag=2', binary: false, hex_preview: null, len: 36, sha256: null, truncated: false, text_truncated: false }
 
   it('renders a decoded table for form-urlencoded bodies (default tab)', () => {

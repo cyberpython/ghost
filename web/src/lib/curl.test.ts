@@ -4,7 +4,7 @@ import { copyCurlCommand } from './curl'
 
 const bv = (text: string | null): BodyView => ({
   text, text_truncated: false, binary: text === null,
-  hex_preview: null, len: 0, sha256: null, truncated: false,
+  hex_preview: null, len: 0, sha256: null, truncated: false, decoded_encoding: null,
 })
 
 const detail = (over: Partial<CaptureDetail> = {}): CaptureDetail => ({
@@ -68,7 +68,7 @@ describe('copyCurlCommand', () => {
 
   it('binary/truncated bodies become a comment, not data', () => {
     const cmd = copyCurlCommand(detail({
-      request_body: { text: null, text_truncated: false, binary: true, hex_preview: null, len: 4096, sha256: null, truncated: true },
+      request_body: { text: null, text_truncated: false, binary: true, hex_preview: null, len: 4096, sha256: null, truncated: true, decoded_encoding: null },
     }))
     expect(cmd).not.toContain('--data-binary')
     expect(cmd).toContain('# body not embedded: binary or truncated (4096 B stored)')
@@ -86,5 +86,22 @@ describe('copyCurlCommand', () => {
     vi.stubGlobal('location', { host: 'viewer.example:9999' })
     const cmd = copyCurlCommand(detail({ request_headers: [{ name: 'x-test', value: 'y' }] }))
     expect(cmd).toContain("'http://viewer.example:9999/api?a=1'")
+  })
+
+  it('view-decoded (gzip) bodies are never embedded: comment, faithful replay', () => {
+    const cmd = copyCurlCommand(detail({
+      request_body: { text: '{"ok":true}', text_truncated: false, binary: false, hex_preview: null, len: 40, sha256: null, truncated: false, decoded_encoding: 'gzip' },
+    }))
+    expect(cmd).not.toContain('--data-binary')
+    expect(cmd).toContain('# body not embedded')
+  })
+
+  it('a GET with a view-decoded body still pins -X GET', () => {
+    const cmd = copyCurlCommand(detail({
+      request_method: 'GET',
+      request_body: { text: '{"ok":true}', text_truncated: false, binary: false, hex_preview: null, len: 40, sha256: null, truncated: false, decoded_encoding: 'gzip' },
+    }))
+    expect(cmd).toContain('-X GET')
+    expect(cmd).not.toContain('--data-binary')
   })
 })

@@ -1,6 +1,7 @@
 export type Hdr = { name: string; value: string }
 export type BodyView = { text: string | null; text_truncated: boolean; binary: boolean;
-  hex_preview: string | null; len: number; sha256: string | null; truncated: boolean }
+  hex_preview: string | null; len: number; sha256: string | null; truncated: boolean;
+  decoded_encoding: string | null }
 export type CaptureListItem = {
   id: number; created_at: string; total_ms: number; client_addr: string;
   request_method: string; request_target: string; upstream_path: string; upstream_query: string | null;

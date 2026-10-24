@@ -28,7 +28,7 @@
 
 use bytes::Bytes;
 use http::header::{CONTENT_LENGTH, CONTENT_TYPE, HOST};
-use http::{HeaderMap, HeaderValue, Method, Version};
+use http::{HeaderMap, HeaderValue, Method, Uri, Version};
 use http_body_util::{BodyExt, Full, LengthLimitError, Limited, combinators::BoxBody};
 use hyper::StatusCode;
 use hyper::body::Incoming;
@@ -180,7 +180,19 @@ async fn proxy(
     // except framing, body bytes identical.
     let mut up_req = Request::new(Full::new(req_bytes.clone()));
     *up_req.method_mut() = method.clone();
-    *up_req.uri_mut() = up_uri;
+    // FR-003 amendment: the request-target goes on the wire in **origin-form**
+    // (`/path?query`) — the client's form, modulo the remap onto the upstream
+    // prefix. The resolved absolute URI is RFC 9112-legal but surprising for
+    // origins (Node surfaces it verbatim, strict servers may reject);
+    // targets that cannot be expressed as origin-form fall back to it.
+    let pq = match up_query.as_deref() {
+        Some(q) => format!("{up_path}?{q}"),
+        None => up_path.clone(),
+    };
+    *up_req.uri_mut() = match pq.parse::<Uri>() {
+        Ok(u) => u,
+        Err(_) => up_uri,
+    };
     {
         let h = up_req.headers_mut();
         for (name, value) in client_headers.iter() {
