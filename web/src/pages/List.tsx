@@ -33,6 +33,14 @@ export default function List({ auto }: { auto: boolean }) {
     if(v==='')n.delete(k); else n.set(k,v)
     setSp(n,{replace:true})
   }
+  const exportUrl=()=>{
+    const p=new URLSearchParams()
+    for (const k of ['method','status','path','client_addr','since','until','error']) {
+      const v=sp.get(k); if(v!==null) p.set(k,v)
+    }
+    p.set('limit','500')
+    return `/api/export/captures?${p.toString()}`
+  }
   const totalPages=Math.max(1,Math.ceil(count/limit))
   const page=Math.min(Math.floor(offset/limit)+1,totalPages)
   const [pageInput,setPageInput]=useState(String(page))
@@ -54,6 +62,10 @@ export default function List({ auto }: { auto: boolean }) {
       {(['status','path','client_addr','since','until','error'] as const).map(k=>(
         <input key={k} placeholder={k} value={sp.get(k)??''} onChange={e=>set(k,e.target.value)} className="border border-[var(--border)] rounded px-2 py-1 text-sm bg-transparent text-[var(--text)] placeholder-[var(--muted)]"/>
       ))}
+      <a href={exportUrl()} download
+        className="border border-[var(--border)] rounded px-2.5 py-1 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors">
+        Export HAR
+      </a>
     </div>
     <CapturesTable captures={rows}/>
     <div className="flex flex-wrap items-center gap-2 my-2">

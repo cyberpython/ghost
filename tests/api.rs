@@ -454,6 +454,88 @@ async fn api_integration() {
         assert_eq!(j["errors"], 2);
     }
 
+    // ── HAR export ────────────────────────────────────────────────────────
+
+    // Single capture: /api/export/captures/1
+    {
+        let (sl, hs, body) = get_raw(port, "/api/export/captures/1").await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        assert_eq!(
+            hdr(&hs, "content-type"),
+            Some("application/json")
+        );
+        assert!(hdr(&hs, "content-disposition")
+            .unwrap()
+            .contains(r#"attachment; filename="capture-1.har""#));
+        let j: Value = serde_json::from_slice(&body).unwrap();
+        // HAR 1.2 wraps everything in a top-level `log` object.
+        assert_eq!(j["log"]["version"], "1.2");
+        assert_eq!(j["log"]["creator"]["name"], "ghost");
+        assert_eq!(j["log"]["entries"].as_array().unwrap().len(), 1);
+        let e = &j["log"]["entries"][0];
+        assert_eq!(e["startedDateTime"], "2024-01-01T00:00:00Z");
+        assert_eq!(e["request"]["method"], "GET");
+        assert_eq!(e["request"]["url"], "http://127.0.0.1:1/app/a");
+        assert_eq!(e["request"]["httpVersion"], "HTTP/1.1");
+        // Text request body inlined as UTF-8 text (no base64).
+        assert_eq!(e["request"]["postData"]["text"], "{\"k\":1}");
+        assert!(e["request"]["postData"].get("encoding").is_none());
+        // Response: status, statusText, text body.
+        assert_eq!(e["response"]["status"], 200);
+        assert_eq!(e["response"]["statusText"], "OK");
+        assert_eq!(e["response"]["content"]["text"], "{\"ok\":true}");
+        assert_eq!(e["response"]["content"]["mimeType"], "application/json");
+        // Headers pass through as [{name, value}].
+        let hdrs = e["request"]["headers"].as_array().unwrap();
+        let names: Vec<&str> = hdrs.iter().map(|h| h["name"].as_str().unwrap()).collect();
+        assert_eq!(names, vec!["host", "x-dup", "x-dup"]);
+        assert!(e.get("error").is_none());
+        assert!(e["response"].get("_error").is_none());
+    }
+
+    // Binary request body round-trips base64: [0xFF, 0xFE, 0x00, 0x01] → "//4AAQ==".
+    {
+        let (_, _, body) = get_raw(port, "/api/export/captures/3").await;
+        let j: Value = serde_json::from_slice(&body).unwrap();
+        let e = &j["log"]["entries"][0];
+        assert_eq!(e["request"]["postData"]["text"], "//4AAQ==");
+        assert_eq!(e["request"]["postData"]["encoding"], "base64");
+        // Failed exchange: no status → 0, error as statusText.
+        assert_eq!(e["response"]["status"], 0);
+        assert_eq!(e["response"]["statusText"], "boom");
+        assert_eq!(e["response"]["_error"], "boom");
+        assert_eq!(e["response"]["headers"].as_array().unwrap().len(), 0);
+        assert_eq!(e["timings"]["wait"], -1);
+        assert_eq!(e["comment"], "boom");
+    }
+
+    // Filter set: method=GET → ids 5, 2, 1 (same order as /api/captures).
+    {
+        let (sl, hs, body) = get_raw(port, "/api/export/captures?method=GET").await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        assert!(hdr(&hs, "content-disposition")
+            .unwrap()
+            .contains(r#"attachment; filename="captures.har""#));
+        let j: Value = serde_json::from_slice(&body).unwrap();
+        let urls: Vec<&str> = j["log"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["request"]["url"].as_str().unwrap())
+            .collect();
+        assert_eq!(urls, vec![
+            "http://127.0.0.1:1/app/a",
+            "http://127.0.0.1:1/app/b",
+            "http://127.0.0.1:1/app/a",
+        ]);
+    }
+
+    // Unknown capture → 404.
+    {
+        let (sl, _, _) = get_raw(port, "/api/export/captures/9999").await;
+        assert!(sl.starts_with("HTTP/1.1 404"));
+    }
+
     // ── Cleanup ────────────────────────────────────────────────────────────
     srv.abort();
 }

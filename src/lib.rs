@@ -6,6 +6,7 @@
 
 pub mod api;
 pub mod db;
+pub mod har;
 pub mod proxy;
 pub mod redact;
 pub mod url_join;
