@@ -27,7 +27,7 @@ export default function SelectDropdown({ value, options, onChange, placeholder, 
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="w-full border border-[var(--border)] rounded px-2.5 py-1.5 text-sm bg-transparent text-[var(--text)] flex items-center justify-between gap-2 min-w-[120px] hover:border-[var(--accent)] transition-colors"
+        className="w-full border border-[var(--border)] rounded px-2.5 py-1.5 text-sm bg-transparent text-[var(--text)] flex items-center justify-between gap-2 hover:border-[var(--accent)] transition-colors"
       >
         <span>{selected?.label || placeholder}</span>
         <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeOpacity={0.6}>
