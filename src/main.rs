@@ -46,6 +46,28 @@ struct Args {
     /// Prune captures older than this many days (0 = disabled).
     #[arg(long, value_parser = clap::value_parser!(u64).range(0..=36500))]
     retention_days: Option<u64>,
+
+    /// Record only requests whose client-side path starts with one of these
+    /// plain strings (repeatable; absent = record everything).
+    #[arg(long, value_parser = non_empty_path)]
+    include_path: Vec<String>,
+
+    /// Never record requests whose client-side path starts with one of these
+    /// plain strings, even when an include path matches (repeatable).
+    #[arg(long, value_parser = non_empty_path)]
+    exclude_path: Vec<String>,
+}
+
+/// FR-027 filter values must be non-empty: an empty string is a prefix of
+/// every path, so an empty `--exclude-path` would silently disable all
+/// capture, and an empty `--include-path` would be a no-op. Values are never
+/// trimmed — matching is byte-faithful by design.
+fn non_empty_path(s: &str) -> Result<String, String> {
+    if s.is_empty() {
+        Err("path filter must not be empty (an empty exclude would match every path)".to_string())
+    } else {
+        Ok(s.to_string())
+    }
 }
 
 #[tokio::main]
@@ -62,39 +84,41 @@ async fn main() -> anyhow::Result<()> {
         db: pool.clone(),
         upstream,
         max_body_bytes: args.max_body_bytes,
+        include_paths: args.include_path,
+        exclude_paths: args.exclude_path,
     };
 
     // Run initial prune if retention is configured.
-    if let Some(days) = args.retention_days {
-        if days > 0 {
-            match db::prune(&pool, days).await {
-                Ok(n) => tracing::info!(pruned = n, "initial retention prune done"),
-                Err(err) => tracing::warn!(error = %err, "initial retention prune failed (proxy continues)"),
-            }
+    if let Some(days) = args.retention_days
+        && days > 0
+    {
+        match db::prune(&pool, days).await {
+            Ok(n) => tracing::info!(pruned = n, "initial retention prune done"),
+            Err(err) => tracing::warn!(error = %err, "initial retention prune failed (proxy continues)"),
         }
     }
 
     // Spawn scheduled pruning task: runs daily at 00:00:01 local time.
-    if let Some(days) = args.retention_days {
-        if days > 0 {
-            let pool_for_schedule = pool.clone();
-            tokio::spawn(async move {
-                loop {
-                    let now = chrono::Local::now();
-                    let next = next_prune_time(now);
-                    let delay = next - now;
-                    let delay = std::time::Duration::from_secs(
-                        delay.num_seconds().max(0) as u64,
-                    );
-                    tokio::time::sleep(delay).await;
+    if let Some(days) = args.retention_days
+        && days > 0
+    {
+        let pool_for_schedule = pool.clone();
+        tokio::spawn(async move {
+            loop {
+                let now = chrono::Local::now();
+                let next = next_prune_time(now);
+                let delay = next - now;
+                let delay = std::time::Duration::from_secs(
+                    delay.num_seconds().max(0) as u64,
+                );
+                tokio::time::sleep(delay).await;
 
-                    match db::prune(&pool_for_schedule, days).await {
-                        Ok(n) => tracing::info!(pruned = n, "scheduled retention prune done"),
-                        Err(err) => tracing::warn!(error = %err, "scheduled retention prune failed (proxy continues)"),
-                    }
+                match db::prune(&pool_for_schedule, days).await {
+                    Ok(n) => tracing::info!(pruned = n, "scheduled retention prune done"),
+                    Err(err) => tracing::warn!(error = %err, "scheduled retention prune failed (proxy continues)"),
                 }
-            });
-        }
+            }
+        });
     }
 
     tracing::info!(
@@ -113,4 +137,16 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_path_filters_are_rejected() {
+        assert!(Args::try_parse_from(["ghost", "--upstream", "http://u", "--include-path", ""]).is_err());
+        assert!(Args::try_parse_from(["ghost", "--upstream", "http://u", "--exclude-path", ""]).is_err());
+        assert!(Args::try_parse_from(["ghost", "--upstream", "http://u", "--include-path", "/a", "--exclude-path", "/b"]).is_ok());
+    }
 }
