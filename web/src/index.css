@@ -39,3 +39,17 @@ body {
   white-space: pre;
   overflow-x: auto;
 }
+
+/* Collapsible JSON tree (FR-026b) — deliberately mirrors the Prism pre
+   blocks (background/padding/margin from the `tomorrow` style, see
+   lib/highlight.tsx) so the Tree tab sits visually with Formatted/Raw. */
+.json-tree {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.5;
+  background: #2d2d2d;
+  color: #ccc;
+  padding: 1em;
+  margin: 0.5em 0;
+  white-space: pre;
+  overflow-x: auto;
+}

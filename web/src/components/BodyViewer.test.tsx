@@ -31,7 +31,18 @@ const bin = { text: null, binary: true, hex_preview: 'ff fe 00 41 42', len: 2048
 const binSmall = { text: null, binary: true, hex_preview: 'ff fe 00 41 42', len: 5, sha256: null, truncated: false, text_truncated: false }
 const badJson = { text: '{"a":1', binary: false, hex_preview: null, len: 6, sha256: null, truncated: true, text_truncated: true }
 describe('BodyViewer', () => {
-  it('highlights JSON', () => { const { container } = render(<BodyViewer view={jb} id={1} part="response" />); expect(container.querySelectorAll('.token').length).toBeGreaterThan(0) })
+  it('renders the JSON tree by default (Tree is the first tab)', () => {
+    const { container } = render(<BodyViewer view={jb} id={1} part="response" />)
+    expect(container.querySelector('.json-tree')).not.toBeNull()
+    expect(container.textContent).toContain('"a": 1')
+    expect(container.querySelectorAll('.token')).toHaveLength(0)
+  })
+  it('shows the highlighted raw JSON on the Raw tab', () => {
+    const { getByRole, container } = render(<BodyViewer view={jb} id={1} part="response" />)
+    fireEvent.click(getByRole('button', { name: 'Raw' }))
+    expect(container.querySelectorAll('.token').length).toBeGreaterThan(0)
+    expect(container.querySelector('.json-tree')).toBeNull()
+  })
   it('highlights XML', () => { const { container } = render(<BodyViewer view={xb} id={1} part="response" />); expect(container.querySelectorAll('.token').length).toBeGreaterThan(0) })
   it('renders hex lines + download link for big binary', () => {
     const { container } = render(<BodyViewer view={bin} id={7} part="request" />)
@@ -46,6 +57,12 @@ describe('BodyViewer', () => {
     const { container } = render(<BodyViewer view={badJson} id={1} part="request" contentType="application/json" />)
     expect(container.textContent).toContain('not valid JSON')
   })
+  it('hides the Tree tab when the JSON does not parse', () => {
+    const { queryByRole, container } = render(
+      <BodyViewer view={badJson} id={1} part="request" contentType="application/json" />)
+    expect(queryByRole('button', { name: 'Tree' })).toBeNull()
+    expect(container.querySelector('.json-tree')).toBeNull()
+  })
   it('shows the full sha256, not an elided prefix', () => {
     const h = 'ab'.repeat(32)
     const { container } = render(<BodyViewer view={{ ...jb, sha256: h }} id={1} part="request" />)
@@ -53,18 +70,34 @@ describe('BodyViewer', () => {
     expect(container.textContent).not.toContain('…')
   })
 
-  it('copies the text body to the clipboard', async () => {
+  it('copies the raw body text to the clipboard', async () => {
     vi.mocked(copyToClipboard).mockResolvedValue(undefined)
     const { getByRole, container } = render(<BodyViewer view={jb} id={1} part="response" />)
-    await fireEvent.click(getByRole('button', { name: 'Copy Body' }))
+    await fireEvent.click(getByRole('button', { name: 'Copy Raw' }))
     await waitFor(() => expect(copyToClipboard).toHaveBeenCalledWith('{"a":1}'))
     await waitFor(() => expect(container.textContent).toContain('Copied!'))
+  })
+
+  it('copies the pretty JSON via Copy Formatted', async () => {
+    vi.mocked(copyToClipboard).mockResolvedValue(undefined)
+    const { getByRole } = render(<BodyViewer view={jb} id={1} part="response" />)
+    await fireEvent.click(getByRole('button', { name: 'Copy Formatted' }))
+    await waitFor(() => expect(copyToClipboard).toHaveBeenCalledWith('{\n  "a": 1\n}'))
+  })
+
+  it('shows Copy Formatted only for parseable JSON', () => {
+    const j = render(<BodyViewer view={jb} id={1} part="response" />)
+    expect(within(j.container).getByRole('button', { name: 'Copy Formatted' })).toBeTruthy()
+    const bad = render(<BodyViewer view={badJson} id={1} part="request" contentType="application/json" />)
+    expect(within(bad.container).queryByRole('button', { name: 'Copy Formatted' })).toBeNull()
+    const x = render(<BodyViewer view={xb} id={1} part="response" />)
+    expect(within(x.container).queryByRole('button', { name: 'Copy Formatted' })).toBeNull()
   })
 
   it('copies the hexdump representation for binary bodies', async () => {
     vi.mocked(copyToClipboard).mockResolvedValue(undefined)
     const { getByRole } = render(<BodyViewer view={binSmall} id={7} part="request" />)
-    await fireEvent.click(getByRole('button', { name: 'Copy Body' }))
+    await fireEvent.click(getByRole('button', { name: 'Copy Raw' }))
     await waitFor(() =>
       expect(copyToClipboard).toHaveBeenCalledWith(expect.stringContaining('00000000')))
   })
@@ -72,7 +105,7 @@ describe('BodyViewer', () => {
   it('shows Copy failed when the clipboard write throws', async () => {
     vi.mocked(copyToClipboard).mockRejectedValue(new Error('nope'))
     const { getByRole, container } = render(<BodyViewer view={jb} id={1} part="request" />)
-    await fireEvent.click(getByRole('button', { name: 'Copy Body' }))
+    await fireEvent.click(getByRole('button', { name: 'Copy Raw' }))
     await waitFor(() => expect(container.textContent).toContain('Copy failed'))
   })
 
