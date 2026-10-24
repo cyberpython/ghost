@@ -47,16 +47,17 @@ fn build_entry(row: &CaptureRow) -> Value {
         "blocked": -1, "dns": -1, "connect": -1, "send": -1,
         "wait": -1, "receive": -1,
     });
-    let entry = json!({
+    let mut entry = json!({
         "startedDateTime": row.created_at,
         "time": row.total_ms,
         "request": request,
         "response": response,
         "cache": {},
         "timings": timings,
-        "serverIPAddress": row.upstream_authority,
-        "comment": row.error.clone(),
     });
+    if let Some(err) = row.error.as_deref().filter(|e| !e.is_empty()) {
+        entry["comment"] = json!(err);
+    }
     entry
 }
 
@@ -95,19 +96,29 @@ fn build_request(row: &CaptureRow, url: &str, query_string: &[Value]) -> Value {
         "headersSize": headers_size,
         "bodySize": body_size,
     });
-    if let Some(body) = &row.request_body {
-        if !body.is_empty() {
-            request["postData"] = body_content(body, &row.request_headers);
-        }
+    if let Some(body) = &row.request_body
+        && !body.is_empty()
+    {
+        request["postData"] = body_content(body, &row.request_headers);
     }
     request
 }
 
 fn build_response(row: &CaptureRow) -> Value {
     let headers = parse_headers(&row.response_headers);
-    let (headers_size, body_size) = body_sizes(&row.response_headers, row.response_body.as_deref());
+    let (headers_size, _) = body_sizes(&row.response_headers, row.response_body.as_deref());
+    // bodySize is the full on-wire length; the stored blob may be a truncated
+    // prefix. (Requests are never truncated — oversized ones are rejected.)
+    let body_size = match row.response_body.as_deref() {
+        Some(b) if !b.is_empty() => row.response_body_len,
+        _ => -1,
+    };
     let status_text = match row.status_code {
-        Some(code) => status_text(code).to_string(),
+        Some(code) => http::StatusCode::from_u16(code as u16)
+            .ok()
+            .and_then(|s| s.canonical_reason())
+            .unwrap_or_default()
+            .to_string(),
         None => row.error.clone().unwrap_or_default(),
     };
     let mut response = json!({
@@ -124,7 +135,7 @@ fn build_response(row: &CaptureRow) -> Value {
     if row.status_code.is_none() {
         // No response was ever received; the HAR spec has no "failed" flag,
         // so we mark it with status 0 and the error as statusText.
-        response["error"] = json!(row.error.clone().unwrap_or_else(|| "unknown error".into()));
+        response["_error"] = json!(row.error.clone().unwrap_or_else(|| "unknown error".into()));
     }
     response
 }
@@ -216,32 +227,69 @@ fn content_type(headers_json: &str) -> String {
     String::new()
 }
 
-/// A short human-readable reason for common status codes; empty otherwise.
-fn status_text(code: i32) -> &'static str {
-    match code {
-        200 => "OK",
-        201 => "Created",
-        204 => "No Content",
-        301 => "Moved Permanently",
-        302 => "Found",
-        304 => "Not Modified",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        403 => "Forbidden",
-        404 => "Not Found",
-        405 => "Method Not Allowed",
-        408 => "Request Timeout",
-        409 => "Conflict",
-        410 => "Gone",
-        413 => "Payload Too Large",
-        414 => "URI Too Long",
-        415 => "Unsupported Media Type",
-        429 => "Too Many Requests",
-        500 => "Internal Server Error",
-        501 => "Not Implemented",
-        502 => "Bad Gateway",
-        503 => "Service Unavailable",
-        504 => "Gateway Timeout",
-        _ => "",
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(response_body: Option<Vec<u8>>, wire_len: i64, truncated: i64) -> CaptureRow {
+        CaptureRow {
+            id: 1,
+            created_at: "2024-01-01T00:00:00Z".into(),
+            total_ms: 5,
+            client_addr: "10.0.0.1".into(),
+            request_version: "1.1".into(),
+            request_method: "GET".into(),
+            request_target: "/app/a".into(),
+            request_headers: json!([{"name": "host", "value": "example.org"}]).to_string(),
+            request_body: None,
+            request_body_len: 0,
+            request_body_truncated: 0,
+            request_body_sha256: None,
+            upstream_scheme: "http".into(),
+            upstream_authority: "example.org:80".into(),
+            upstream_path: "/app/a".into(),
+            upstream_query: None,
+            response_version: Some("1.1".into()),
+            status_code: Some(200),
+            response_headers: json!([{"name": "content-type", "value": "application/json"}])
+                .to_string(),
+            response_body,
+            response_body_len: wire_len,
+            response_body_truncated: truncated,
+            response_body_sha256: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn body_size_reports_wire_length_not_stored_blob() {
+        // Stored blob is a truncated 5-byte prefix of a 20-byte body.
+        let r = row(Some(b"01234".to_vec()), 20, 1);
+        let doc = build_log(std::slice::from_ref(&r));
+        let e = &doc["log"]["entries"][0];
+        assert_eq!(e["response"]["bodySize"], 20);
+        assert_eq!(e["response"]["content"]["size"], 20);
+        assert_eq!(
+            e["response"]["content"]["comment"],
+            "body truncated to stored prefix"
+        );
+    }
+
+    #[test]
+    fn server_ip_address_omitted_without_resolution() {
+        let r = row(None, 0, 0);
+        let doc = build_log(std::slice::from_ref(&r));
+        let e = &doc["log"]["entries"][0];
+        assert!(e.get("serverIPAddress").is_none());
+        // No error → no entry-level `comment` key (not "comment": null).
+        assert!(e.get("comment").is_none());
+    }
+
+    #[test]
+    fn unknown_status_text_is_empty() {
+        let mut r = row(None, 0, 0);
+        r.status_code = Some(599);
+        let doc = build_log(std::slice::from_ref(&r));
+        assert_eq!(doc["log"]["entries"][0]["response"]["statusText"], "");
     }
 }

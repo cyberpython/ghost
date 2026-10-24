@@ -159,7 +159,9 @@ ghost-api --db captures.db --listen 127.0.0.1:8090 --static-dir web/dist
   as UTF-8 `content.text`; binary bodies are base64-encoded with
   `encoding: "base64"` so they survive the JSON round-trip byte-for-byte.
   Failed exchanges (no HTTP status) are emitted with `status: 0` and the
-  error as `statusText`.
+  error as `statusText`. Note that bodies are exported exactly as stored —
+  wire-faithful — so gzip-encoded responses are base64 of the compressed
+  bytes (the viewer's decode-on-read is a separate view).
 
 ### Dev flow
 

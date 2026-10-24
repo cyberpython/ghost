@@ -490,6 +490,7 @@ async fn api_integration() {
         let names: Vec<&str> = hdrs.iter().map(|h| h["name"].as_str().unwrap()).collect();
         assert_eq!(names, vec!["host", "x-dup", "x-dup"]);
         assert!(e.get("error").is_none());
+        assert!(e["response"].get("_error").is_none());
     }
 
     // Binary request body round-trips base64: [0xFF, 0xFE, 0x00, 0x01] → "//4AAQ==".
@@ -502,7 +503,7 @@ async fn api_integration() {
         // Failed exchange: no status → 0, error as statusText.
         assert_eq!(e["response"]["status"], 0);
         assert_eq!(e["response"]["statusText"], "boom");
-        assert_eq!(e["response"]["error"], "boom");
+        assert_eq!(e["response"]["_error"], "boom");
         assert_eq!(e["response"]["headers"].as_array().unwrap().len(), 0);
         assert_eq!(e["timings"]["wait"], -1);
         assert_eq!(e["comment"], "boom");
