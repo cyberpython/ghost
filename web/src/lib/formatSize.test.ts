@@ -20,4 +20,12 @@ describe('formatSize', () => {
   it('falls back to GB for very large bodies', () => {
     expect(formatSize(1024 * 1024 * 1024)).toBe('1.0 GB')
   })
+  it('drops the GB decimal above 10, like the KB/MB tiers', () => {
+    expect(formatSize(2048 * 1024 * 1024 * 1024)).toBe('2048 GB')
+  })
+  it('clamps negative and non-finite input to 0 B', () => {
+    expect(formatSize(-5)).toBe('0 B')
+    expect(formatSize(NaN)).toBe('0 B')
+    expect(formatSize(Infinity)).toBe('0 B')
+  })
 })

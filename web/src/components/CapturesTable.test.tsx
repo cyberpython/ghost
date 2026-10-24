@@ -5,9 +5,9 @@ import CapturesTable from './CapturesTable'
 import type { CaptureListItem } from '../api'
 const rows: CaptureListItem[] = [
   { id: 1, created_at: 't', total_ms: 5, client_addr: 'c', request_method: 'GET', request_target: '/a', upstream_path: '/a',
-    upstream_query: null, status_code: 200, error: null, request_body_len: 150, request_body_truncated: 0, response_body_len: 0, response_body_truncated: 0 },
+    upstream_query: null, status_code: 200, error: null, request_body_len: 150, request_body_truncated: false, response_body_len: 0, response_body_truncated: false },
   { id: 2, created_at: 't', total_ms: 6, client_addr: 'c2', request_method: 'POST', request_target: '/b', upstream_path: '/b',
-    upstream_query: null, status_code: 500, error: 'boom', request_body_len: 2048, request_body_truncated: 1, response_body_len: 0, response_body_truncated: 0 },
+    upstream_query: null, status_code: 500, error: 'boom', request_body_len: 2048, request_body_truncated: true, response_body_len: 0, response_body_truncated: false },
 ]
 const renderTable = () => render(
   <MemoryRouter><CapturesTable captures={rows}/></MemoryRouter>
