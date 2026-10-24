@@ -18,6 +18,7 @@ export type CaptureDetail = {
   response_version: string | null; status_code: number | null; response_headers: Hdr[];
   response_body: BodyView; error: string | null }
 export type Facets = { methods: string[]; statuses: number[]; errors: number }
+export type AdjacentIds = { prev: number | null; next: number | null }
 
 export async function listCaptures(q: { method?: string; status?: number | null; path?: string; client_addr?: string;
   since?: string; until?: string; limit?: number; offset?: number }) {
@@ -35,6 +36,14 @@ export async function getCapture(id: number) {
   const r = await fetch(`/api/captures/${id}`)
   if (!r.ok) throw new Error('http ' + r.status)
   return (await r.json()) as CaptureDetail
+}
+// FR-039: resolved S/N adjacency for the detail view's Prev/Next; nulls at
+// the ends of the capture sequence.
+export async function getAdjacent(id: number) {
+  const r = await fetch(`/api/captures/${id}/adjacent`)
+  if (!r.ok) throw new Error('http ' + r.status)
+  const j = await r.json()
+  return { prev: j.prev as number | null, next: j.next as number | null }
 }
 export async function getFacets() {
   return (await (await fetch('/api/facets')).json()) as Facets

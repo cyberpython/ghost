@@ -1,17 +1,42 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router'
-import { getCapture } from '../api'
-import type { CaptureDetail } from '../api'
+import { useParams, useNavigate } from 'react-router'
+import { getCapture, getAdjacent } from '../api'
+import type { CaptureDetail, AdjacentIds } from '../api'
+import Header from '../components/Header'
 import BodyViewer from '../components/BodyViewer'
 import MethodBadge from '../components/MethodBadge'
 import StatusBadge from '../components/StatusBadge'
 import { upstreamUrl } from '../lib/assembleUrl'
 import { parseQuery, targetQuery } from '../lib/parseQuery'
-export default function Detail(){
+import { navBtn } from '../lib/navBtn'
+export default function Detail({ auto, onAuto }: { auto: boolean; onAuto: (v: boolean) => void }){
   const {id}=useParams() as {id:string}
+  const navigate=useNavigate()
   const [d,setD]=useState<CaptureDetail | null>(null)
-  useEffect(()=>{ getCapture(Number(id)).then(setD).catch(console.error) },[id])
-  if(!d) return <p className="muted">loading…</p>
+  const [adj,setAdj]=useState<{for:string; a:AdjacentIds}|null>(null)
+  // Cancellation guards: a late-resolving fetch from the previous capture must
+  // not clobber the current one. adj is keyed by the id it was fetched for, so
+  // Prev/Next never show the previous capture's neighbors while loading.
+  useEffect(()=>{ let alive=true; getCapture(Number(id)).then(x=>{ if(alive) setD(x) }).catch(console.error); return ()=>{ alive=false } },[id])
+  useEffect(()=>{ let alive=true; getAdjacent(Number(id)).then(a=>{ if(alive) setAdj({for:id,a}) }).catch(console.error); return ()=>{ alive=false } },[id])
+  const cur=adj && adj.for===id ? adj.a : null
+  // Same button styling/text as the list pager's Prev/Next (FR-039); the ends
+  // of the sequence disable. Orientation is S/N: Prev = lower id (temporally
+  // earlier), Next = higher id.
+  const nav = cur && (
+    <>
+      <button disabled={cur.prev===null} onClick={()=>navigate(`/captures/${cur.prev}`)} className={navBtn} title="previous capture (lower id)">
+        <span className="inline-flex items-center gap-1"><svg className="w-3 h-3" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={1.5} aria-hidden="true"><path d="M7 2L3 6l4 4" strokeLinecap="round" strokeLinejoin="round"/></svg>Prev</span>
+      </button>
+      <button disabled={cur.next===null} onClick={()=>navigate(`/captures/${cur.next}`)} className={navBtn} title="next capture (higher id)">
+        <span className="inline-flex items-center gap-1">Next<svg className="w-3 h-3" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={1.5} aria-hidden="true"><path d="M5 2l4 4-4 4" strokeLinecap="round" strokeLinejoin="round"/></svg></span>
+      </button>
+    </>
+  )
+  if(!d) return (<>
+    <Header auto={auto} onAuto={onAuto} middle={nav}/>
+    <main className="px-4"><p className="muted">loading…</p></main>
+  </>)
   const reqCt = d.request_headers.find(h=>h.name==='content-type')?.value
   const respCt = d.response_headers.find(h=>h.name==='content-type')?.value
   const params = parseQuery(targetQuery(d.request_target))
@@ -27,14 +52,15 @@ export default function Detail(){
     { label: 'Response version', value: d.response_version ?? '—' },
   ]
   return (<>
-    <div className="flex justify-end mb-2">
+    <Header auto={auto} onAuto={onAuto} middle={nav}/>
+    <main className="px-4">
+    {d.error && <div className="bg-[color-mix(in_srgb,var(--s-5xx)_15%,transparent)] text-[var(--s-5xx)] px-2.5 py-1.5 rounded mb-2">error: {d.error}</div>}
+    <div className="relative my-4">
       <a href={`/api/export/captures/${d.id}`} download
-        className="border border-[var(--border)] rounded px-2.5 py-1 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors">
+        className="absolute top-0 right-0 border border-[var(--border)] rounded px-2.5 py-1 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors">
         Export HAR
       </a>
-    </div>
-    {d.error && <div className="bg-[color-mix(in_srgb,var(--s-5xx)_15%,transparent)] text-[var(--s-5xx)] px-2.5 py-1.5 rounded mb-2">error: {d.error}</div>}
-    <table className="border-collapse w-full mb-4">
+    <table className="border-collapse w-full">
       <tbody>
         {infoRows.map(({label, value}) => (
           <tr key={label} className="border-b border-[var(--border)]">
@@ -44,6 +70,7 @@ export default function Detail(){
         ))}
       </tbody>
     </table>
+    </div>
     <h3 className="text-lg font-semibold mb-2">Query parameters</h3>
     {params.length ? (
       <table className="border-collapse w-full table-fixed">
@@ -71,5 +98,6 @@ export default function Detail(){
         <BodyViewer view={d.response_body} contentType={respCt} id={d.id} part="response"/>
       </div>
     </div>
+    </main>
   </>)
 }
