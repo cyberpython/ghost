@@ -5,6 +5,7 @@ import type { CaptureListItem } from '../api'
 import Header from '../components/Header'
 import CapturesTable from '../components/CapturesTable'
 import SelectDropdown from '../components/SelectDropdown'
+import { navBtn } from '../lib/navBtn'
 
 const HTTP_METHODS = ['GET','POST','PUT','DELETE','PATCH','HEAD','OPTIONS','CONNECT','TRACE']
 const METHOD_OPTIONS = [{ label: 'ALL', value: '' }, ...HTTP_METHODS.map(m => ({ label: m, value: m }))]
@@ -60,11 +61,9 @@ export default function List({ auto, onAuto }: { auto: boolean; onAuto: (v: bool
   return (<>
     <Header auto={auto} onAuto={onAuto} middle={<>
       <button disabled={page<=1} onClick={()=>goToPage(page-1)}
-        className="border border-[var(--border)] rounded px-2.5 py-1 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[var(--border)]">
-        <span className="inline-flex items-center gap-1"><svg className="w-3 h-3" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={1.5} aria-hidden="true"><path d="M7 2L3 6l4 4" strokeLinecap="round" strokeLinejoin="round"/></svg>First</span>
-      </button>
+        className={navBtn} title="first page" aria-label="First page">{'<<'}</button>
       <button disabled={page<=1} onClick={()=>goToPage(page-1)}
-        className="border border-[var(--border)] rounded px-2.5 py-1 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[var(--border)]">
+        className={navBtn}>
         <span className="inline-flex items-center gap-1"><svg className="w-3 h-3" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={1.5} aria-hidden="true"><path d="M7 2L3 6l4 4" strokeLinecap="round" strokeLinejoin="round"/></svg>Prev</span>
       </button>
       <span className="text-sm text-[var(--text)] whitespace-nowrap">
@@ -76,13 +75,11 @@ export default function List({ auto, onAuto }: { auto: boolean; onAuto: (v: bool
         /> of <span className="muted">{totalPages}</span>
       </span>
       <button disabled={page>=totalPages} onClick={()=>goToPage(page+1)}
-        className="border border-[var(--border)] rounded px-2.5 py-1 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[var(--border)]">
+        className={navBtn}>
         <span className="inline-flex items-center gap-1">Next<svg className="w-3 h-3" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={1.5} aria-hidden="true"><path d="M5 2l4 4-4 4" strokeLinecap="round" strokeLinejoin="round"/></svg></span>
       </button>
       <button disabled={page>=totalPages} onClick={()=>goToPage(totalPages)}
-        className="border border-[var(--border)] rounded px-2.5 py-1 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[var(--border)]">
-        <span className="inline-flex items-center gap-1">Last<svg className="w-3 h-3" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={1.5} aria-hidden="true"><path d="M5 2l4 4-4 4" strokeLinecap="round" strokeLinejoin="round"/></svg></span>
-      </button>
+        className={navBtn} title="last page" aria-label="Last page">{'>>'}</button>
       <span className="muted text-sm whitespace-nowrap">{count} total</span>
     </>}/>
     <main className="px-4">

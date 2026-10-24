@@ -8,23 +8,27 @@ import MethodBadge from '../components/MethodBadge'
 import StatusBadge from '../components/StatusBadge'
 import { upstreamUrl } from '../lib/assembleUrl'
 import { parseQuery, targetQuery } from '../lib/parseQuery'
+import { navBtn } from '../lib/navBtn'
 export default function Detail({ auto, onAuto }: { auto: boolean; onAuto: (v: boolean) => void }){
   const {id}=useParams() as {id:string}
   const navigate=useNavigate()
   const [d,setD]=useState<CaptureDetail | null>(null)
-  const [adj,setAdj]=useState<AdjacentIds | null>(null)
-  useEffect(()=>{ getCapture(Number(id)).then(setD).catch(console.error) },[id])
-  useEffect(()=>{ getAdjacent(Number(id)).then(setAdj).catch(console.error) },[id])
+  const [adj,setAdj]=useState<{for:string; a:AdjacentIds}|null>(null)
+  // Cancellation guards: a late-resolving fetch from the previous capture must
+  // not clobber the current one. adj is keyed by the id it was fetched for, so
+  // Prev/Next never show the previous capture's neighbors while loading.
+  useEffect(()=>{ let alive=true; getCapture(Number(id)).then(x=>{ if(alive) setD(x) }).catch(console.error); return ()=>{ alive=false } },[id])
+  useEffect(()=>{ let alive=true; getAdjacent(Number(id)).then(a=>{ if(alive) setAdj({for:id,a}) }).catch(console.error); return ()=>{ alive=false } },[id])
+  const cur=adj && adj.for===id ? adj.a : null
   // Same button styling/text as the list pager's Prev/Next (FR-039); the ends
   // of the sequence disable. Orientation is S/N: Prev = lower id (temporally
   // earlier), Next = higher id.
-  const navBtn='border border-[var(--border)] rounded px-2.5 py-1 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[var(--border)]'
-  const nav = adj && (
+  const nav = cur && (
     <>
-      <button disabled={adj.prev===null} onClick={()=>navigate(`/captures/${adj.prev}`)} className={navBtn} title="previous capture (lower id)">
+      <button disabled={cur.prev===null} onClick={()=>navigate(`/captures/${cur.prev}`)} className={navBtn} title="previous capture (lower id)">
         <span className="inline-flex items-center gap-1"><svg className="w-3 h-3" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={1.5} aria-hidden="true"><path d="M7 2L3 6l4 4" strokeLinecap="round" strokeLinejoin="round"/></svg>Prev</span>
       </button>
-      <button disabled={adj.next===null} onClick={()=>navigate(`/captures/${adj.next}`)} className={navBtn} title="next capture (higher id)">
+      <button disabled={cur.next===null} onClick={()=>navigate(`/captures/${cur.next}`)} className={navBtn} title="next capture (higher id)">
         <span className="inline-flex items-center gap-1">Next<svg className="w-3 h-3" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={1.5} aria-hidden="true"><path d="M5 2l4 4-4 4" strokeLinecap="round" strokeLinejoin="round"/></svg></span>
       </button>
     </>
