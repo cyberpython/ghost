@@ -60,7 +60,7 @@ export default function List({ auto, onAuto }: { auto: boolean; onAuto: (v: bool
   }
   return (<>
     <Header auto={auto} onAuto={onAuto} middle={<>
-      <button disabled={page<=1} onClick={()=>goToPage(page-1)}
+      <button disabled={page<=1} onClick={()=>goToPage(1)}
         className={navBtn} title="first page" aria-label="First page">{'<<'}</button>
       <button disabled={page<=1} onClick={()=>goToPage(page-1)}
         className={navBtn}>
