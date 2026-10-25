@@ -240,8 +240,8 @@ fn body_view(
 // ── Handlers ────────────────────────────────────────────────────────────────
 
 /// Build the WHERE clause for the list filters. Shared by the JSON list
-/// endpoint and the HAR export so both always agree on what "the current
-/// filter set" means.
+/// endpoint, the HAR export, and `/api/stats` so all three always agree on
+/// what "the current filter set" means.
 fn where_sql(q: &ListQuery) -> String {
     // Normalize status filter: "ERR"/"err"/"error" → match NULL status_code
     let (status_raw, is_err) = normalize_status(q.status.as_deref());
@@ -570,6 +570,93 @@ async fn facets(
     })))
 }
 
+// ── Stats (FR-016 KPI panel + FR-018 requests/hour graph) ───────────────────
+
+/// One cell of the method × status-class breakdown (FR-016).
+#[derive(sqlx::FromRow)]
+struct MethodStatusRow {
+    request_method: String,
+    status_class: String,
+    count: i64,
+}
+
+/// One hourly bucket (FR-018): `hour` is the start of the hour, `count` the
+/// requests in it. Only hours with data are returned (empty hours are gaps).
+#[derive(sqlx::FromRow)]
+struct HourlyRow {
+    hour: String,
+    count: i64,
+}
+
+/// `GET /api/stats`: the single aggregate endpoint behind both the KPI panel
+/// (FR-016) and the requests/hour graph (FR-018). It takes the same filter set
+/// as `/api/captures` and returns:
+///   * `total` — captures in the window;
+///   * `by_method_status` — the method × status-class breakdown (FR-016);
+///   * `hourly` — requests-per-hour buckets, only hours with data (FR-018).
+/// The graph's Total/Avg/Peak chips are computed client-side from `hourly`;
+/// the endpoint itself is a pure aggregation over the active filter set.
+async fn stats(
+    State(pool): State<sqlx::sqlite::SqlitePool>,
+    Query(q): Query<ListQuery>,
+) -> R {
+    let where_sql = where_sql(&q);
+
+    let total: i64 = sqlx::query_scalar(&format!(
+        "SELECT COUNT(*) FROM captures WHERE {}", where_sql))
+        .fetch_one(&pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let ms_sql = format!(
+        "SELECT request_method, \
+         CASE WHEN status_code IS NULL THEN 'err' \
+              WHEN status_code >= 500 THEN '5xx' \
+              WHEN status_code >= 400 THEN '4xx' \
+              WHEN status_code >= 300 THEN '3xx' \
+              ELSE '2xx' END AS status_class, \
+         COUNT(*) AS count \
+         FROM captures WHERE {} \
+         GROUP BY request_method, status_class \
+         ORDER BY request_method ASC, status_class ASC",
+        where_sql
+    );
+    let ms_rows: Vec<MethodStatusRow> = sqlx::query_as(&ms_sql)
+        .fetch_all(&pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let hourly_sql = format!(
+        "SELECT strftime('%Y-%m-%dT%H:00:00Z', created_at) AS hour, COUNT(*) AS count \
+         FROM captures WHERE {} \
+         GROUP BY hour ORDER BY hour ASC",
+        where_sql
+    );
+    let hourly_rows: Vec<HourlyRow> = sqlx::query_as(&hourly_sql)
+        .fetch_all(&pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let by_method_status: Vec<Value> = ms_rows
+        .into_iter()
+        .map(|r| json!({
+            "method": r.request_method,
+            "status_class": r.status_class,
+            "count": r.count,
+        }))
+        .collect();
+    let hourly: Vec<Value> = hourly_rows
+        .into_iter()
+        .map(|r| json!({ "hour": r.hour, "count": r.count }))
+        .collect();
+
+    Ok(Json(json!({
+        "total": total,
+        "by_method_status": by_method_status,
+        "hourly": hourly,
+    })))
+}
+
 // ── Router + run ────────────────────────────────────────────────────────────
 
 pub fn build_router(pool: sqlx::sqlite::SqlitePool, static_dir: &StdPath) -> Router {
@@ -581,6 +668,7 @@ pub fn build_router(pool: sqlx::sqlite::SqlitePool, static_dir: &StdPath) -> Rou
         .route("/api/export/captures/{id}", get(har_detail))
         .route("/api/captures/{id}/adjacent", get(adjacent))
         .route("/api/facets", get(facets))
+        .route("/api/stats", get(stats))
         .with_state(pool);
     if static_dir.exists() {
         let index = static_dir.join("index.html");

@@ -468,6 +468,96 @@ async fn api_integration() {
         assert_eq!(j["errors"], 2);
     }
 
+    // ── Stats (FR-016 KPI panel + FR-018 requests/hour graph) ─────────────
+
+    // Unfiltered: total, method × status-class breakdown, hourly buckets.
+    {
+        let (sl, body) = get(port, "/api/stats").await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["total"], 5);
+        let ms = j["by_method_status"].as_array().unwrap();
+        assert_eq!(ms.len(), 4);
+        assert_eq!(ms[0]["method"], "CONNECT");
+        assert_eq!(ms[0]["status_class"], "err");
+        assert_eq!(ms[0]["count"], 1);
+        assert_eq!(ms[1]["method"], "GET");
+        assert_eq!(ms[1]["status_class"], "2xx");
+        assert_eq!(ms[1]["count"], 2);
+        assert_eq!(ms[2]["method"], "GET");
+        assert_eq!(ms[2]["status_class"], "4xx");
+        assert_eq!(ms[2]["count"], 1);
+        assert_eq!(ms[3]["method"], "POST");
+        assert_eq!(ms[3]["status_class"], "err");
+        assert_eq!(ms[3]["count"], 1);
+        // Only hours with data — no fabricated zeros.
+        let hourly = j["hourly"].as_array().unwrap();
+        assert_eq!(hourly.len(), 5);
+        assert_eq!(hourly[0]["hour"], "2024-01-01T00:00:00Z");
+        assert_eq!(hourly[0]["count"], 1);
+        assert_eq!(hourly[4]["hour"], "2024-01-05T00:00:00Z");
+        assert_eq!(hourly[4]["count"], 1);
+    }
+
+    // method=GET → only the GET rows, in both the breakdown and the buckets.
+    {
+        let (sl, body) = get(port, "/api/stats?method=GET").await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["total"], 3);
+        let ms = j["by_method_status"].as_array().unwrap();
+        assert_eq!(ms.len(), 2);
+        assert_eq!(ms[0]["method"], "GET");
+        assert_eq!(ms[0]["status_class"], "2xx");
+        assert_eq!(ms[0]["count"], 2);
+        assert_eq!(ms[1]["method"], "GET");
+        assert_eq!(ms[1]["status_class"], "4xx");
+        assert_eq!(ms[1]["count"], 1);
+        let hourly = j["hourly"].as_array().unwrap();
+        assert_eq!(hourly.len(), 3);
+        assert_eq!(hourly[0]["hour"], "2024-01-01T00:00:00Z");
+        assert_eq!(hourly[2]["hour"], "2024-01-05T00:00:00Z");
+    }
+
+    // since=2024-01-03T00:00:00Z → ids 3, 4, 5 (POST, CONNECT, GET).
+    {
+        let (sl, body) = get(port, "/api/stats?since=2024-01-03T00:00:00Z").await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["total"], 3);
+        let ms = j["by_method_status"].as_array().unwrap();
+        assert_eq!(ms.len(), 3);
+        assert_eq!(ms[0]["method"], "CONNECT");
+        assert_eq!(ms[0]["status_class"], "err");
+        assert_eq!(ms[1]["method"], "GET");
+        assert_eq!(ms[1]["status_class"], "2xx");
+        assert_eq!(ms[2]["method"], "POST");
+        assert_eq!(ms[2]["status_class"], "err");
+        let hourly = j["hourly"].as_array().unwrap();
+        assert_eq!(hourly.len(), 3);
+        assert_eq!(hourly[0]["hour"], "2024-01-03T00:00:00Z");
+    }
+
+    // until=2024-01-02T00:00:00Z → ids 1, 2 (both GET).
+    {
+        let (sl, body) = get(port, "/api/stats?until=2024-01-02T00:00:00Z").await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["total"], 2);
+        let ms = j["by_method_status"].as_array().unwrap();
+        assert_eq!(ms.len(), 2);
+        assert_eq!(ms[0]["method"], "GET");
+        assert_eq!(ms[0]["status_class"], "2xx");
+        assert_eq!(ms[0]["count"], 1);
+        assert_eq!(ms[1]["method"], "GET");
+        assert_eq!(ms[1]["status_class"], "4xx");
+        assert_eq!(ms[1]["count"], 1);
+        let hourly = j["hourly"].as_array().unwrap();
+        assert_eq!(hourly.len(), 2);
+        assert_eq!(hourly[0]["hour"], "2024-01-01T00:00:00Z");
+        assert_eq!(hourly[1]["hour"], "2024-01-02T00:00:00Z");
+    }
+
     // ── HAR export ────────────────────────────────────────────────────────
 
     // Single capture: /api/export/captures/1
