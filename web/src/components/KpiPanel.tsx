@@ -1,16 +1,29 @@
 import { useMemo } from 'react'
 import type { MethodStatusCell } from '../api'
-import { methodColor } from '../lib/colors'
 
 const STATUS_CLASSES = ['2xx', '3xx', '4xx', '5xx', 'err'] as const
 type StatusClass = (typeof STATUS_CLASSES)[number]
 
+// Status-class colors as CSS vars so they follow the active theme (the light
+// theme overrides --s-* with darker, higher-contrast values).
 const STATUS_CLASS_COLOR: Record<StatusClass, string> = {
-  '2xx': '#22c55e',
-  '3xx': '#38bdf8',
-  '4xx': '#f59e0b',
-  '5xx': '#ef4444',
-  'err': '#a78bfa',
+  '2xx': 'var(--s-2xx)',
+  '3xx': 'var(--s-3xx)',
+  '4xx': 'var(--s-4xx)',
+  '5xx': 'var(--s-5xx)',
+  'err': 'var(--s-null)',
+}
+
+// Method colors as CSS vars for the same reason.
+const METHOD_COLOR: Record<string, string> = {
+  GET: 'var(--m-get)',
+  POST: 'var(--m-post)',
+  PUT: 'var(--m-put)',
+  DELETE: 'var(--m-delete)',
+  HEAD: 'var(--m-head)',
+}
+function methodColor(m: string): string {
+  return METHOD_COLOR[m.toUpperCase()] ?? 'var(--m-other)'
 }
 
 interface KpiPanelProps {

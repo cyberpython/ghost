@@ -9,6 +9,7 @@ import {
 } from 'chart.js'
 import { Bar } from 'react-chartjs-2'
 import type { HourlyBucket } from '../api'
+import { useCssVar } from '../lib/useTheme'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip)
 
@@ -22,6 +23,9 @@ interface TimeGraphProps {
 }
 
 export default function TimeGraph({ hourly, onHourClick }: TimeGraphProps) {
+  // Canvas-drawn bars can't use var() directly, so resolve the accent at render
+  // time and re-resolve when the theme toggles.
+  const barColor = useCssVar('--accent')
   const [windowStart, setWindowStart] = useState<string>(() => {
     const d = new Date()
     d.setMinutes(0, 0, 0)
@@ -75,7 +79,7 @@ export default function TimeGraph({ hourly, onHourClick }: TimeGraphProps) {
     labels,
     datasets: [{
       data: counts,
-      backgroundColor: '#38bdf8',
+      backgroundColor: barColor,
       borderRadius: 2,
     }],
   }
