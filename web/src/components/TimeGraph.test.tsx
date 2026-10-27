@@ -30,8 +30,7 @@ function firstHourOfWindow(): string {
   return hourKey(d)
 }
 
-// A single bucket at the first hour of the window: stepping forward pushes it
-// out of view (no data), stepping back keeps it in view.
+// A single bucket at the first hour of the window.
 function makeHourly(): HourlyBucket[] {
   return [{ hour: firstHourOfWindow(), count: 7 }]
 }
@@ -55,12 +54,23 @@ describe('TimeGraph', () => {
     expect(spy.mock.calls[0][0]).toMatch(/:00:00Z$/)
   })
 
-  it('disables stepping when the target window has no data', () => {
+  it('keeps stepping enabled even when the target window has no data', () => {
     const { getByRole } = render(<TimeGraph hourly={makeHourly()} onHourClick={() => {}} />)
-    // Data only exists 3–5 h ago; the default window (last 24 h) has data,
-    // so stepping back into it is allowed, but stepping forward (future) is not.
+    // Stepping into empty windows (e.g. the future) must stay possible so the
+    // user can always navigate; "Now" is provided to get back to the present.
     expect((getByRole('button', { name: 'Step back 1 hour' }) as HTMLButtonElement).disabled).toBe(false)
-    expect((getByRole('button', { name: 'Step forward 1 hour' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((getByRole('button', { name: 'Step forward 1 hour' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('provides a "Now" button that resets the window to the current time', () => {
+    const { getByRole } = render(<TimeGraph hourly={makeHourly()} onHourClick={() => {}} />)
+    // The reset control is always present so the user can get back to the
+    // last-24h window after stepping into empty segments. (The actual reset
+    // re-renders the chart, which jsdom can't drive; verified in-browser.)
+    const nowBtn = getByRole('button', { name: 'Reset to current time' })
+    expect(nowBtn).toBeTruthy()
+    expect((nowBtn as HTMLButtonElement).disabled).toBe(false)
+    expect(nowBtn.getAttribute('title')).toMatch(/last 24 h/)
   })
 
   it('renders a Chart.js bar chart', () => {

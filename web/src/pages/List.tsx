@@ -60,6 +60,12 @@ export default function List({ auto, onAuto }: { auto: boolean; onAuto: (v: bool
     n.set('until',endOfHour(hour))
     setSp(n,{replace:true})
   }
+  const clearFilters=()=>{
+    const n=new URLSearchParams(sp)
+    for (const k of ['method','status','path','client_addr','since','until','error']) n.delete(k)
+    n.set('offset','0')
+    setSp(n,{replace:true})
+  }
   const exportUrl=()=>{
     const p=new URLSearchParams()
     for (const k of ['method','status','path','client_addr','since','until','error']) {
@@ -113,6 +119,10 @@ export default function List({ auto, onAuto }: { auto: boolean; onAuto: (v: bool
         {(['status','path','client_addr','since','until','error'] as const).map(k=>(
           <input key={k} placeholder={k} value={sp.get(k)??''} onChange={e=>set(k,e.target.value)} className="flex-1 min-w-[8rem] border border-[var(--border)] rounded px-2 py-1 text-sm bg-transparent text-[var(--text)] placeholder-[var(--muted)]"/>
         ))}
+        <button onClick={clearFilters}
+          className="border border-[var(--border)] rounded px-2.5 py-1 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors">
+          Clear filters
+        </button>
         <a href={exportUrl()} download
           className="border border-[var(--border)] rounded px-2.5 py-1 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors">
           Export HAR

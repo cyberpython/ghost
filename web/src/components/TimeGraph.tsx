@@ -17,6 +17,14 @@ function hourKey(d: Date): string {
   return d.toISOString().slice(0, 13) + ':00:00Z'
 }
 
+// The default window is the last 24 h ending at the current hour.
+function defaultWindowStart(): string {
+  const d = new Date()
+  d.setMinutes(0, 0, 0)
+  d.setHours(d.getHours() - 24)
+  return hourKey(d)
+}
+
 interface TimeGraphProps {
   hourly: HourlyBucket[]
   onHourClick: (hour: string) => void
@@ -26,12 +34,7 @@ export default function TimeGraph({ hourly, onHourClick }: TimeGraphProps) {
   // Canvas-drawn bars can't use var() directly, so resolve the accent at render
   // time and re-resolve when the theme toggles.
   const barColor = useCssVar('--accent')
-  const [windowStart, setWindowStart] = useState<string>(() => {
-    const d = new Date()
-    d.setMinutes(0, 0, 0)
-    d.setHours(d.getHours() - 24)
-    return hourKey(d)
-  })
+  const [windowStart, setWindowStart] = useState<string>(defaultWindowStart)
 
   const hours = useMemo(() => {
     const start = new Date(windowStart)
@@ -59,19 +62,9 @@ export default function TimeGraph({ hourly, onHourClick }: TimeGraphProps) {
     setWindowStart(hourKey(d))
   }, [windowStart])
 
-  // Stepping is only allowed when the target 24 h window still contains data,
-  // so the graph stops at fully empty windows.
-  const { canGoBack, canGoForward } = useMemo(() => {
-    const hasData = (startStr: string) => {
-      const end = new Date(startStr)
-      end.setHours(end.getHours() + 24)
-      const endStr = end.toISOString()
-      return hourly.some(h => h.hour >= startStr && h.hour < endStr)
-    }
-    const back = new Date(windowStart); back.setHours(back.getHours() - 1)
-    const fwd = new Date(windowStart); fwd.setHours(fwd.getHours() + 1)
-    return { canGoBack: hasData(hourKey(back)), canGoForward: hasData(hourKey(fwd)) }
-  }, [windowStart, hourly])
+  // The window can always be stepped in either direction; "Now" snaps it back
+  // to the last 24 h ending at the current hour.
+  const resetToNow = () => setWindowStart(defaultWindowStart())
 
   const labels = hours.map(h => h.slice(11, 16))
 
@@ -129,20 +122,32 @@ export default function TimeGraph({ hourly, onHourClick }: TimeGraphProps) {
       </div>
       <div className="flex items-center gap-2 mb-2">
         <button
-          disabled={!canGoBack}
           onClick={() => step(-1)}
-          className="border border-[var(--border)] rounded px-2 py-0.5 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          className="border border-[var(--border)] rounded px-2 py-0.5 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors"
           aria-label="Step back 1 hour"
         >
           {'← 1h'}
         </button>
         <button
-          disabled={!canGoForward}
           onClick={() => step(1)}
-          className="border border-[var(--border)] rounded px-2 py-0.5 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          className="border border-[var(--border)] rounded px-2 py-0.5 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors"
           aria-label="Step forward 1 hour"
         >
           {'1h →'}
+        </button>
+        <button
+          onClick={resetToNow}
+          className="border border-[var(--border)] rounded px-2 py-0.5 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors"
+          aria-label="Reset to current time"
+          title="Reset the window to the last 24 h ending now"
+        >
+          <span className="inline-flex items-center gap-1">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 16 16" stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
+              <circle cx="8" cy="8" r="6.25" />
+              <path d="M8 4.75V8l2.25 1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Now
+          </span>
         </button>
         <span className="muted text-sm ml-auto">
           {hours[0].slice(0, 10)} {hours[0].slice(11, 16)} – {hours[23].slice(11, 16)}
