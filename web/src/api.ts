@@ -20,6 +20,9 @@ export type CaptureDetail = {
   response_body: BodyView; error: string | null }
 export type Facets = { methods: string[]; statuses: number[]; errors: number }
 export type AdjacentIds = { prev: number | null; next: number | null }
+export type MethodStatusCell = { method: string; status_class: string; count: number }
+export type HourlyBucket = { hour: string; count: number }
+export type Stats = { total: number; by_method_status: MethodStatusCell[]; hourly: HourlyBucket[] }
 
 export async function listCaptures(q: { method?: string; status?: number | null; path?: string; client_addr?: string;
   since?: string; until?: string; limit?: number; offset?: number }) {
@@ -48,4 +51,12 @@ export async function getAdjacent(id: number) {
 }
 export async function getFacets() {
   return (await (await fetch('/api/facets')).json()) as Facets
+}
+// FR-016/FR-018: the single aggregate endpoint behind the KPI panel and the
+// requests/hour graph. Takes the same filter set as listCaptures.
+export async function getStats(q: { method?: string; status?: number | null; path?: string; client_addr?: string;
+  since?: string; until?: string }) {
+  const p = new URLSearchParams()
+  for (const [k, v] of Object.entries(q)) if (v !== undefined) p.set(k, String(v))
+  return (await (await fetch(`/api/stats?${p.toString()}`)).json()) as Stats
 }
