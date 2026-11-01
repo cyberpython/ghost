@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from 'react'
+import { useMemo, useState } from 'react'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -10,20 +10,9 @@ import {
 import { Bar } from 'react-chartjs-2'
 import type { HourlyBucket } from '../api'
 import { useCssVar } from '../lib/useTheme'
+import { shiftHour, windowAnchor, windowHours } from '../lib/timegraph'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip)
-
-function hourKey(d: Date): string {
-  return d.toISOString().slice(0, 13) + ':00:00Z'
-}
-
-// The default window is the last 24 h ending at the current hour.
-function defaultWindowStart(): string {
-  const d = new Date()
-  d.setMinutes(0, 0, 0)
-  d.setHours(d.getHours() - 24)
-  return hourKey(d)
-}
 
 interface TimeGraphProps {
   hourly: HourlyBucket[]
@@ -34,16 +23,18 @@ export default function TimeGraph({ hourly, onHourClick }: TimeGraphProps) {
   // Canvas-drawn bars can't use var() directly, so resolve the accent at render
   // time and re-resolve when the theme toggles.
   const barColor = useCssVar('--accent')
-  const [windowStart, setWindowStart] = useState<string>(defaultWindowStart)
-
-  const hours = useMemo(() => {
-    const start = new Date(windowStart)
-    return Array.from({ length: 24 }, (_, i) => {
-      const d = new Date(start)
-      d.setHours(start.getHours() + i)
-      return hourKey(d)
-    })
-  }, [windowStart])
+  // The window anchors at the most recent capture's hour, not wall-clock now:
+  // a stale/inactive DB still shows the last 24 h of activity that preceded it
+  // going quiet, and the graph slides forward automatically as new captures
+  // land. Stepping pins the window (manual !== null) while investigating; the
+  // "Latest" button clears the pin and resumes auto-following.
+  const latest = hourly.reduce((m, h) => (h.hour > m ? h.hour : m), '')
+  // Mount-clock: only consumed by the empty-DB fallback (pure render); with
+  // data present the anchor comes from the buckets, not the wall clock.
+  const [bootIso] = useState(() => new Date().toISOString())
+  const [manual, setManual] = useState<string | null>(null)
+  const start = windowAnchor(latest, manual, bootIso)
+  const hours = useMemo(() => windowHours(start), [start])
 
   const counts = useMemo(() => {
     const map = new Map(hourly.map(h => [h.hour, h.count]))
@@ -56,15 +47,11 @@ export default function TimeGraph({ hourly, onHourClick }: TimeGraphProps) {
   const peakIdx = peak > 0 ? counts.findIndex(c => c === peak) : -1
   const peakHour = peakIdx >= 0 ? hours[peakIdx] : null
 
-  const step = useCallback((dir: -1 | 1) => {
-    const d = new Date(windowStart)
-    d.setHours(d.getHours() + dir)
-    setWindowStart(hourKey(d))
-  }, [windowStart])
-
-  // The window can always be stepped in either direction; "Now" snaps it back
-  // to the last 24 h ending at the current hour.
-  const resetToNow = () => setWindowStart(defaultWindowStart())
+  // Stepping is always available in either direction (accepted FR-035 UX:
+  // buttons never disable so empty ranges can't dead-end); "Latest" snaps the
+  // window back to the most recent capture's hour.
+  const step = (dir: -1 | 1) => setManual(shiftHour(start, dir))
+  const resetToLatest = () => setManual(null)
 
   const labels = hours.map(h => h.slice(11, 16))
 
@@ -136,17 +123,17 @@ export default function TimeGraph({ hourly, onHourClick }: TimeGraphProps) {
           {'1h →'}
         </button>
         <button
-          onClick={resetToNow}
+          onClick={resetToLatest}
           className="border border-[var(--border)] rounded px-2 py-0.5 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors"
-          aria-label="Reset to current time"
-          title="Reset the window to the last 24 h ending now"
+          aria-label="Reset to latest capture window"
+          title="Reset the window to the 24 h ending at the most recent capture"
         >
           <span className="inline-flex items-center gap-1">
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 16 16" stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
               <circle cx="8" cy="8" r="6.25" />
               <path d="M8 4.75V8l2.25 1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-            Now
+            Latest
           </span>
         </button>
         <span className="muted text-sm ml-auto">

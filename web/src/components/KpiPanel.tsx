@@ -1,16 +1,26 @@
 import { useMemo } from 'react'
-import type { MethodStatusCell } from '../api'
+import type { MethodStatusCell, StatWindow } from '../api'
 import { methodColor, statusClassColor } from '../lib/colors'
 
 const STATUS_CLASSES = ['2xx', '3xx', '4xx', '5xx', 'err'] as const
 type StatusClass = (typeof STATUS_CLASSES)[number]
 
+// FR-033 selectable windows: 24 h maps to the same 24 hourly buckets the
+// requests/hour graph plots, so the panel's numbers agree with the bars.
+const WINDOW_OPTIONS: { k: StatWindow; label: string }[] = [
+  { k: '24h', label: '24 h' },
+  { k: '7d', label: '7 d' },
+  { k: 'all', label: 'All' },
+]
+
 interface KpiPanelProps {
   byMethodStatus: MethodStatusCell[]
   total: number
+  statWindow: StatWindow
+  onStatWindow: (w: StatWindow) => void
 }
 
-export default function KpiPanel({ byMethodStatus, total }: KpiPanelProps) {
+export default function KpiPanel({ byMethodStatus, total, statWindow, onStatWindow }: KpiPanelProps) {
   const { methods, grid } = useMemo(() => {
     const methods = new Set<string>()
     const grid = new Map<string, number>()
@@ -37,11 +47,31 @@ export default function KpiPanel({ byMethodStatus, total }: KpiPanelProps) {
     return m
   }, [byMethodStatus])
 
+  // Windowed views show the sum of the breakdown cells (its own total); the
+  // 'all' view shows the endpoint's unfiltered total.
+  const cellsSum = byMethodStatus.reduce((s, c) => s + c.count, 0)
+  const shownTotal = statWindow === 'all' ? total : cellsSum
+
   return (
     <div className="border border-[var(--border)] rounded p-3">
-      <div className="flex items-baseline gap-2 mb-2">
+      <div className="flex items-center flex-wrap gap-2 mb-2">
         <h2 className="text-sm font-medium">Traffic by method × status class</h2>
-        <span className="muted text-sm">total {total}</span>
+        <span className="muted text-sm">total {shownTotal}</span>
+        <div className="flex items-center gap-1 ml-auto">
+          {WINDOW_OPTIONS.map(({ k, label }) => (
+            <button key={k} onClick={() => onStatWindow(k)}
+              className={k === statWindow
+                ? 'px-2 py-0.5 text-xs rounded bg-[var(--panel)] border border-[var(--border)] cursor-pointer'
+                : 'px-2 py-0.5 text-xs rounded border border-[var(--border)] cursor-pointer hover:border-[var(--accent)] transition-colors'}
+              title={k === '24h'
+                ? 'Last 24 hourly buckets ending at the most recent capture'
+                : k === '7d'
+                  ? 'Last 168 hourly buckets ending at the most recent capture'
+                  : 'Active filters, entire history'}>
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
       {methods.length === 0 ? (
         <p className="muted text-sm">No captures match the active filters.</p>

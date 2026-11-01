@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router'
 import { listCaptures, getStats } from '../api'
-import type { CaptureListItem, Stats } from '../api'
+import type { CaptureListItem, Stats, StatWindow } from '../api'
 import Header from '../components/Header'
 import CapturesTable from '../components/CapturesTable'
 import SelectDropdown from '../components/SelectDropdown'
@@ -25,6 +25,9 @@ export default function List({ auto, onAuto }: { auto: boolean; onAuto: (v: bool
   const [count,setCount]=useState(0)
   const [stats,setStats]=useState<Stats|null>(null)
   const [statsErr,setStatsErr]=useState(false)
+  // FR-033 KPI window chips: 24h / 7d / all — applied only to the stats call,
+  // never to the list's own since/until filters.
+  const [statWin,setStatWin]=useState<StatWindow>('all')
   const limit=20
   const offset=Number(sp.get('offset')||'0')
   const filterQuery=useCallback(():{[k:string]:any}=>{
@@ -41,14 +44,16 @@ export default function List({ auto, onAuto }: { auto: boolean; onAuto: (v: bool
   },[filterQuery,offset])
   const loadStats=useCallback(async()=>{
     try {
-      const s=await getStats(filterQuery())
+      const q:{[k:string]:any}=filterQuery()
+      if (statWin!=='all') q.window=statWin
+      const s=await getStats(q)
       setStats(s); setStatsErr(false)
     } catch {
       // /api/stats failing must not surface as an unhandled rejection in the
       // 5 s poll; both panels hide and a muted note keeps the failure visible.
       setStats(null); setStatsErr(true)
     }
-  },[filterQuery])
+  },[filterQuery,statWin])
   useEffect(()=>{load()},[load])
   useEffect(()=>{loadStats()},[loadStats])
   useEffect(()=>{
@@ -137,7 +142,7 @@ export default function List({ auto, onAuto }: { auto: boolean; onAuto: (v: bool
       </div>
       {stats && (
         <div className="flex flex-col gap-3 mb-3">
-          <KpiPanel byMethodStatus={stats.by_method_status} total={stats.total}/>
+          <KpiPanel byMethodStatus={stats.by_method_status} total={stats.total} statWindow={statWin} onStatWindow={setStatWin}/>
           <TimeGraph hourly={stats.hourly} onHourClick={onHourClick}/>
         </div>
       )}

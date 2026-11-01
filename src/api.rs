@@ -116,6 +116,7 @@ pub struct ListQuery {
     pub since: Option<String>,
     pub until: Option<String>,
     pub error: Option<String>,
+    pub window: Option<String>,
     pub limit: Option<u64>,
     pub offset: Option<u64>,
 }
@@ -608,6 +609,37 @@ async fn stats(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    // FR-033 selectable windows (24 h / 7 d / all), anchored at the most recent
+    // capture in the filtered set — not wall-clock time — so a stale DB still
+    // shows the activity that preceded it going quiet. The KPI breakdown
+    // observes the window; `hourly` always spans the full filtered set (it
+    // feeds the slidable graph, which owns its own window). The window is
+    // expressed as hourly buckets: 24 h = 24 buckets ending at the latest
+    // capture's hour (hence the −23 h / −167 h deltas), so the panel's numbers
+    // agree with the graph's visible bars under the same window.
+    let window_delta = match q.window.as_deref().unwrap_or("").trim().to_lowercase().as_str() {
+        "24h" => Some("-23 hours"),
+        "7d" => Some("-167 hours"),
+        // anything else (absent, "all", garbage) → unwindowed
+        _ => None,
+    };
+    let mut ms_where = where_sql.clone();
+    if let Some(delta) = &window_delta {
+        // The anchor formats back into RFC3339-with-Z so it compares
+        // lexicographically against `created_at` exactly like the since/until
+        // filters do. strftime(…, NULL, …) yields NULL on an empty set.
+        let anchor: Option<String> = sqlx::query_scalar(&format!(
+            "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', \
+             (SELECT MAX(created_at) FROM captures WHERE {}), '{}')",
+            where_sql, delta))
+            .fetch_one(&pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if let Some(a) = anchor {
+            ms_where.push_str(&format!("\n  AND created_at >= '{}'", a));
+        }
+    }
+
     let ms_sql = format!(
         "SELECT request_method, \
          CASE WHEN status_code IS NULL THEN 'err' \
@@ -619,7 +651,7 @@ async fn stats(
          FROM captures WHERE {} \
          GROUP BY request_method, status_class \
          ORDER BY request_method ASC, status_class ASC",
-        where_sql
+        ms_where
     );
     let ms_rows: Vec<MethodStatusRow> = sqlx::query_as(&ms_sql)
         .fetch_all(&pool)
