@@ -39,7 +39,7 @@ describe('TimeGraph', () => {
   it('shows Total / Avg / Peak chips computed from the hourly buckets', () => {
     const { container } = render(<TimeGraph hourly={makeHourly()} onHourClick={() => {}} />)
     // Total = 10, Avg = 10/24 ≈ 0.4, Peak = 7
-    expect(container.textContent).toContain('Total')
+    expect(container.textContent).toContain('Total 24h')
     expect(container.textContent).toContain('Avg req/h')
     expect(container.textContent).toContain('Peak')
     expect(container.textContent).toContain('7')

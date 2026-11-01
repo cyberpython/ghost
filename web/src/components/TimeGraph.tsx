@@ -105,7 +105,7 @@ export default function TimeGraph({ hourly, onHourClick }: TimeGraphProps) {
     <div className="border border-[var(--border)] rounded p-3">
       <div className="flex flex-wrap gap-2 mb-2">
         <span className="border border-[var(--border)] rounded px-2 py-0.5 text-sm">
-          Total <strong>{total}</strong>
+          Total 24h <strong>{total}</strong>
         </span>
         <span className="border border-[var(--border)] rounded px-2 py-0.5 text-sm">
           Avg req/h <strong>{avg.toFixed(1)}</strong>

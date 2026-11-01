@@ -24,6 +24,7 @@ export default function List({ auto, onAuto }: { auto: boolean; onAuto: (v: bool
   const [rows,setRows]=useState<CaptureListItem[]>([])
   const [count,setCount]=useState(0)
   const [stats,setStats]=useState<Stats|null>(null)
+  const [statsErr,setStatsErr]=useState(false)
   const limit=20
   const offset=Number(sp.get('offset')||'0')
   const filterQuery=useCallback(():{[k:string]:any}=>{
@@ -39,8 +40,14 @@ export default function List({ auto, onAuto }: { auto: boolean; onAuto: (v: bool
     setRows(r.captures); setCount(r.count)
   },[filterQuery,offset])
   const loadStats=useCallback(async()=>{
-    const s=await getStats(filterQuery())
-    setStats(s)
+    try {
+      const s=await getStats(filterQuery())
+      setStats(s); setStatsErr(false)
+    } catch {
+      // /api/stats failing must not surface as an unhandled rejection in the
+      // 5 s poll; both panels hide and a muted note keeps the failure visible.
+      setStats(null); setStatsErr(true)
+    }
   },[filterQuery])
   useEffect(()=>{load()},[load])
   useEffect(()=>{loadStats()},[loadStats])
@@ -134,6 +141,7 @@ export default function List({ auto, onAuto }: { auto: boolean; onAuto: (v: bool
           <TimeGraph hourly={stats.hourly} onHourClick={onHourClick}/>
         </div>
       )}
+      {statsErr && <p className="muted text-sm mb-3">stats unavailable</p>}
       <CapturesTable captures={rows}/>
     </main>
   </>)

@@ -1,30 +1,9 @@
 import { useMemo } from 'react'
 import type { MethodStatusCell } from '../api'
+import { methodColor, statusClassColor } from '../lib/colors'
 
 const STATUS_CLASSES = ['2xx', '3xx', '4xx', '5xx', 'err'] as const
 type StatusClass = (typeof STATUS_CLASSES)[number]
-
-// Status-class colors as CSS vars so they follow the active theme (the light
-// theme overrides --s-* with darker, higher-contrast values).
-const STATUS_CLASS_COLOR: Record<StatusClass, string> = {
-  '2xx': 'var(--s-2xx)',
-  '3xx': 'var(--s-3xx)',
-  '4xx': 'var(--s-4xx)',
-  '5xx': 'var(--s-5xx)',
-  'err': 'var(--s-null)',
-}
-
-// Method colors as CSS vars for the same reason.
-const METHOD_COLOR: Record<string, string> = {
-  GET: 'var(--m-get)',
-  POST: 'var(--m-post)',
-  PUT: 'var(--m-put)',
-  DELETE: 'var(--m-delete)',
-  HEAD: 'var(--m-head)',
-}
-function methodColor(m: string): string {
-  return METHOD_COLOR[m.toUpperCase()] ?? 'var(--m-other)'
-}
 
 interface KpiPanelProps {
   byMethodStatus: MethodStatusCell[]
@@ -72,7 +51,7 @@ export default function KpiPanel({ byMethodStatus, total }: KpiPanelProps) {
             <tr>
               <th className="text-left px-2 py-1 text-sm font-medium">Method</th>
               {STATUS_CLASSES.map(sc => (
-                <th key={sc} className="text-right px-2 py-1 text-sm font-medium" style={{ color: STATUS_CLASS_COLOR[sc] }}>
+                <th key={sc} className="text-right px-2 py-1 text-sm font-medium" style={{ color: statusClassColor(sc) }}>
                   {sc}
                 </th>
               ))}
@@ -87,7 +66,7 @@ export default function KpiPanel({ byMethodStatus, total }: KpiPanelProps) {
                   const v = grid.get(`${m}|${sc}`)
                   return (
                     <td key={sc} className="px-2 py-1 text-right tabular-nums text-sm"
-                      style={v ? { color: STATUS_CLASS_COLOR[sc] } : { color: 'var(--muted)' }}>
+                      style={v ? { color: statusClassColor(sc) } : { color: 'var(--muted)' }}>
                       {v ?? '·'}
                     </td>
                   )
@@ -103,7 +82,7 @@ export default function KpiPanel({ byMethodStatus, total }: KpiPanelProps) {
               <td className="px-2 py-1 text-sm font-medium">Total</td>
               {STATUS_CLASSES.map(sc => (
                 <td key={sc} className="px-2 py-1 text-right tabular-nums text-sm font-medium"
-                  style={{ color: STATUS_CLASS_COLOR[sc] }}>
+                  style={{ color: statusClassColor(sc) }}>
                   {classTotals.get(sc) ?? 0}
                 </td>
               ))}
