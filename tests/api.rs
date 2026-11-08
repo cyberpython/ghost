@@ -576,7 +576,8 @@ async fn api_integration() {
         assert_eq!(j["hourly"].as_array().unwrap().len(), 5);
     }
 
-    // window=7d → since = 2023-12-29T01:00:00Z: the 5-day fixture fits inside.
+    // window=7d → since = 2023-12-30T00:00:00Z (day-floored anchor, 6 days back
+    // from the latest capture's day): the 5-day fixture fits inside.
     {
         let (sl, body) = get(port, "/api/stats?window=7d").await;
         assert!(sl.starts_with("HTTP/1.1 200"));

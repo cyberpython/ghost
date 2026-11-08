@@ -613,25 +613,27 @@ async fn stats(
     // capture in the filtered set — not wall-clock time — so a stale DB still
     // shows the activity that preceded it going quiet. The KPI breakdown
     // observes the window; `hourly` always spans the full filtered set (it
-    // feeds the slidable graph, which owns its own window). The window is
-    // expressed as hourly buckets: 24 h = 24 buckets ending at the latest
-    // capture's hour (hence the −23 h / −167 h deltas), so the panel's numbers
-    // agree with the graph's visible bars under the same window.
-    let window_delta = match q.window.as_deref().unwrap_or("").trim().to_lowercase().as_str() {
-        "24h" => Some("-23 hours"),
-        "7d" => Some("-167 hours"),
+    // feeds the slidable graph, which owns its own window). Each window is a
+    // (strftime format, delta) pair: 24 h floors to the hour and backs off 23 h
+    // (24 hourly buckets ending at the latest capture's hour); 7 d floors to the
+    // UTC day and backs off 6 days (7 daily buckets ending at the latest
+    // capture's day). The panel's numbers agree with the graph's visible bars
+    // under the same window by construction.
+    let window_anchor = match q.window.as_deref().unwrap_or("").trim().to_lowercase().as_str() {
+        "24h" => Some(("%Y-%m-%dT%H:%M:%SZ", "-23 hours")),
+        "7d" => Some(("%Y-%m-%dT00:00:00Z", "-6 days")),
         // anything else (absent, "all", garbage) → unwindowed
         _ => None,
     };
     let mut ms_where = where_sql.clone();
-    if let Some(delta) = &window_delta {
+    if let Some((fmt, delta)) = &window_anchor {
         // The anchor formats back into RFC3339-with-Z so it compares
         // lexicographically against `created_at` exactly like the since/until
         // filters do. strftime(…, NULL, …) yields NULL on an empty set.
         let anchor: Option<String> = sqlx::query_scalar(&format!(
-            "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', \
-             (SELECT MAX(created_at) FROM captures WHERE {}), '{}')",
-            where_sql, delta))
+            "SELECT strftime('{fmt}', \
+             (SELECT MAX(created_at) FROM captures WHERE {where_sql}), '{delta}')",
+            fmt = fmt, where_sql = where_sql, delta = delta))
             .fetch_one(&pool)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

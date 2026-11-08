@@ -12,13 +12,6 @@ import { navBtn } from '../lib/navBtn'
 const HTTP_METHODS = ['GET','POST','PUT','DELETE','PATCH','HEAD','OPTIONS','CONNECT','TRACE']
 const METHOD_OPTIONS = [{ label: 'ALL', value: '' }, ...HTTP_METHODS.map(m => ({ label: m, value: m }))]
 
-// End of the hour (YYYY-MM-DDTHH:00:00Z) as an inclusive upper bound.
-function endOfHour(hour: string): string {
-  const d = new Date(hour)
-  d.setUTCMinutes(59, 59)
-  return d.toISOString().replace(/\.\d{3}Z$/, 'Z')
-}
-
 export default function List({ auto, onAuto }: { auto: boolean; onAuto: (v: boolean) => void }) {
   const [sp,setSp]=useSearchParams()
   const [rows,setRows]=useState<CaptureListItem[]>([])
@@ -66,10 +59,12 @@ export default function List({ auto, onAuto }: { auto: boolean; onAuto: (v: bool
     if(v==='')n.delete(k); else n.set(k,v)
     setSp(n,{replace:true})
   }
-  const onHourClick=(hour:string)=>{
+  // Span-aware click-through: the graph hands back inclusive since/until bounds
+  // for the clicked bucket (hour or day); we just apply them as list filters.
+  const onBucketClick=(since:string,until:string)=>{
     const n=new URLSearchParams(sp)
-    n.set('since',hour)
-    n.set('until',endOfHour(hour))
+    n.set('since',since)
+    n.set('until',until)
     setSp(n,{replace:true})
   }
   const clearFilters=()=>{
@@ -143,7 +138,9 @@ export default function List({ auto, onAuto }: { auto: boolean; onAuto: (v: bool
       {stats && (
         <div className="flex flex-col gap-3 mb-3">
           <KpiPanel byMethodStatus={stats.by_method_status} total={stats.total} statWindow={statWin} onStatWindow={setStatWin}/>
-          <TimeGraph hourly={stats.hourly} onHourClick={onHourClick}/>
+          {/* key remounts the graph per chip: a pin in hour-space is meaningless
+              in day-space, so switching chips resets the navigation state. */}
+          <TimeGraph key={statWin} hourly={stats.hourly} window={statWin} onBucketClick={onBucketClick}/>
         </div>
       )}
       {statsErr && <p className="muted text-sm mb-3">stats unavailable</p>}

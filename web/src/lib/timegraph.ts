@@ -35,3 +35,72 @@ export function windowAnchor(latest: string, manual: string | null, nowIso: stri
   d.setUTCMinutes(0, 0, 0)
   return shiftHour(hourKey(d), -24)
 }
+
+// ── Day-grain helpers (FR-033 chip-driven graph) ────────────────────────────
+
+// UTC day key (YYYY-MM-DD) for a Date.
+export function dayKey(d: Date): string {
+  return d.toISOString().slice(0, 10)
+}
+
+// Shift a UTC day key by n days (can be negative).
+export function shiftDay(day: string, n: number): string {
+  const d = new Date(day + 'T00:00:00Z')
+  d.setUTCDate(d.getUTCDate() + n)
+  return dayKey(d)
+}
+
+// N consecutive UTC day buckets starting at `startDay` (inclusive).
+export function windowDays(startDay: string, count: number): string[] {
+  return Array.from({ length: count }, (_, i) => shiftDay(startDay, i))
+}
+
+// Day-grain window anchor derivation (mirror of windowAnchor for the 7d chip):
+// - manual pin wins;
+// - otherwise follow the most recent capture's day — 7 daily buckets ending
+//   at that day;
+// - no data → wall-clock fallback with the same 7-completed-days shape.
+export function dayAnchor(latestDay: string, manual: string | null, nowIso: string): string {
+  if (manual) return manual
+  if (latestDay) return shiftDay(latestDay, -6)
+  const d = new Date(nowIso)
+  return shiftDay(dayKey(d), -6)
+}
+
+// Span for the "All" window: every UTC day from first to latest (inclusive).
+export function daySpan(firstDay: string, latestDay: string): string[] {
+  const start = Date.parse(firstDay + 'T00:00:00Z')
+  const end = Date.parse(latestDay + 'T00:00:00Z')
+  const nDays = Math.round((end - start) / 86_400_000) + 1
+  return Array.from({ length: nDays }, (_, i) => shiftDay(firstDay, i))
+}
+
+// Sum hourly buckets per UTC day. Returns only days that have captures,
+// sorted by day key. Zero-capture days are absent (the component maps them
+// to null gaps).
+export function rollupByDay(hourly: { hour: string; count: number }[]): { day: string; count: number }[] {
+  const m = new Map<string, number>()
+  for (const h of hourly) {
+    const day = h.hour.slice(0, 10)
+    m.set(day, (m.get(day) ?? 0) + h.count)
+  }
+  return [...m.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([day, count]) => ({ day, count }))
+}
+
+// ── Inclusive upper bounds for click-through filters ────────────────────────
+
+// End of the hour (YYYY-MM-DDTHH:00:00Z) as an inclusive upper bound.
+export function endOfHour(hour: string): string {
+  const d = new Date(hour)
+  d.setUTCMinutes(59, 59)
+  return d.toISOString().replace(/\.\d{3}Z$/, 'Z')
+}
+
+// End of the day (YYYY-MM-DD) as an inclusive upper bound: YYYY-MM-DDT23:59:59Z.
+export function endOfDay(day: string): string {
+  const d = new Date(day + 'T00:00:00Z')
+  d.setUTCHours(23, 59, 59)
+  return d.toISOString().replace(/\.\d{3}Z$/, 'Z')
+}
