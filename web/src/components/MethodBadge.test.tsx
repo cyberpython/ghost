@@ -4,9 +4,9 @@ import MethodBadge from './MethodBadge'
 import { methodColor } from '../lib/colors'
 describe('MethodBadge', () => {
   it('color map', () => {
-    expect(methodColor('GET')).toBe('#22c55e')
-    expect(methodColor('POST')).toBe('#38bdf8')
-    expect(methodColor('PATCH')).toBe('#8b93a7')
+    expect(methodColor('GET')).toBe('var(--m-get)')
+    expect(methodColor('POST')).toBe('var(--m-post)')
+    expect(methodColor('PATCH')).toBe('var(--m-other)')
   })
   it('renders label', () => { render(<MethodBadge m="GET" />); expect(screen.getByText('GET')).toBeTruthy() })
 })

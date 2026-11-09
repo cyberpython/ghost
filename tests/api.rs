@@ -468,6 +468,133 @@ async fn api_integration() {
         assert_eq!(j["errors"], 2);
     }
 
+    // ── Stats (FR-016 KPI panel + FR-018 requests/hour graph) ─────────────
+
+    // Unfiltered: total, method × status-class breakdown, hourly buckets.
+    {
+        let (sl, body) = get(port, "/api/stats").await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["total"], 5);
+        let ms = j["by_method_status"].as_array().unwrap();
+        assert_eq!(ms.len(), 4);
+        assert_eq!(ms[0]["method"], "CONNECT");
+        assert_eq!(ms[0]["status_class"], "err");
+        assert_eq!(ms[0]["count"], 1);
+        assert_eq!(ms[1]["method"], "GET");
+        assert_eq!(ms[1]["status_class"], "2xx");
+        assert_eq!(ms[1]["count"], 2);
+        assert_eq!(ms[2]["method"], "GET");
+        assert_eq!(ms[2]["status_class"], "4xx");
+        assert_eq!(ms[2]["count"], 1);
+        assert_eq!(ms[3]["method"], "POST");
+        assert_eq!(ms[3]["status_class"], "err");
+        assert_eq!(ms[3]["count"], 1);
+        // Only hours with data — no fabricated zeros.
+        let hourly = j["hourly"].as_array().unwrap();
+        assert_eq!(hourly.len(), 5);
+        assert_eq!(hourly[0]["hour"], "2024-01-01T00:00:00Z");
+        assert_eq!(hourly[0]["count"], 1);
+        assert_eq!(hourly[4]["hour"], "2024-01-05T00:00:00Z");
+        assert_eq!(hourly[4]["count"], 1);
+    }
+
+    // method=GET → only the GET rows, in both the breakdown and the buckets.
+    {
+        let (sl, body) = get(port, "/api/stats?method=GET").await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["total"], 3);
+        let ms = j["by_method_status"].as_array().unwrap();
+        assert_eq!(ms.len(), 2);
+        assert_eq!(ms[0]["method"], "GET");
+        assert_eq!(ms[0]["status_class"], "2xx");
+        assert_eq!(ms[0]["count"], 2);
+        assert_eq!(ms[1]["method"], "GET");
+        assert_eq!(ms[1]["status_class"], "4xx");
+        assert_eq!(ms[1]["count"], 1);
+        let hourly = j["hourly"].as_array().unwrap();
+        assert_eq!(hourly.len(), 3);
+        assert_eq!(hourly[0]["hour"], "2024-01-01T00:00:00Z");
+        assert_eq!(hourly[2]["hour"], "2024-01-05T00:00:00Z");
+    }
+
+    // since=2024-01-03T00:00:00Z → ids 3, 4, 5 (POST, CONNECT, GET).
+    {
+        let (sl, body) = get(port, "/api/stats?since=2024-01-03T00:00:00Z").await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["total"], 3);
+        let ms = j["by_method_status"].as_array().unwrap();
+        assert_eq!(ms.len(), 3);
+        assert_eq!(ms[0]["method"], "CONNECT");
+        assert_eq!(ms[0]["status_class"], "err");
+        assert_eq!(ms[1]["method"], "GET");
+        assert_eq!(ms[1]["status_class"], "2xx");
+        assert_eq!(ms[2]["method"], "POST");
+        assert_eq!(ms[2]["status_class"], "err");
+        let hourly = j["hourly"].as_array().unwrap();
+        assert_eq!(hourly.len(), 3);
+        assert_eq!(hourly[0]["hour"], "2024-01-03T00:00:00Z");
+    }
+
+    // until=2024-01-02T00:00:00Z → ids 1, 2 (both GET).
+    {
+        let (sl, body) = get(port, "/api/stats?until=2024-01-02T00:00:00Z").await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["total"], 2);
+        let ms = j["by_method_status"].as_array().unwrap();
+        assert_eq!(ms.len(), 2);
+        assert_eq!(ms[0]["method"], "GET");
+        assert_eq!(ms[0]["status_class"], "2xx");
+        assert_eq!(ms[0]["count"], 1);
+        assert_eq!(ms[1]["method"], "GET");
+        assert_eq!(ms[1]["status_class"], "4xx");
+        assert_eq!(ms[1]["count"], 1);
+        let hourly = j["hourly"].as_array().unwrap();
+        assert_eq!(hourly.len(), 2);
+        assert_eq!(hourly[0]["hour"], "2024-01-01T00:00:00Z");
+        assert_eq!(hourly[1]["hour"], "2024-01-02T00:00:00Z");
+    }
+
+    // window=24h → the breakdown only covers the 24 hourly buckets ending at
+    // the most recent capture (2024-01-05T00:00:00Z), i.e. created_at >=
+    // 2024-01-04T01:00:00Z: only id 5 (GET 2xx) qualifies; id 4 (01-04T00)
+    // sits in the bucket just outside. `total` and `hourly` remain unfiltered
+    // by the window (the panel observes it; the graph owns its own window).
+    {
+        let (sl, body) = get(port, "/api/stats?window=24h").await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["total"], 5);
+        let ms = j["by_method_status"].as_array().unwrap();
+        assert_eq!(ms.len(), 1);
+        assert_eq!(ms[0]["method"], "GET");
+        assert_eq!(ms[0]["status_class"], "2xx");
+        assert_eq!(ms[0]["count"], 1);
+        assert_eq!(j["hourly"].as_array().unwrap().len(), 5);
+    }
+
+    // window=7d → since = 2023-12-30T00:00:00Z (day-floored anchor, 6 days back
+    // from the latest capture's day): the 5-day fixture fits inside.
+    {
+        let (sl, body) = get(port, "/api/stats?window=7d").await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["total"], 5);
+        assert_eq!(j["by_method_status"].as_array().unwrap().len(), 4);
+        assert_eq!(j["hourly"].as_array().unwrap().len(), 5);
+    }
+
+    // Unknown window values fall back to the unwindowed breakdown.
+    {
+        let (sl, body) = get(port, "/api/stats?window=banana").await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["by_method_status"].as_array().unwrap().len(), 4);
+    }
+
     // ── HAR export ────────────────────────────────────────────────────────
 
     // Single capture: /api/export/captures/1
