@@ -116,7 +116,7 @@ export default function KpiPanel({ byMethodStatus, total, statWindow, onStatWind
                   {classTotals.get(sc) ?? 0}
                 </td>
               ))}
-              <td className="px-2 py-1 text-right tabular-nums text-sm font-medium">{total}</td>
+              <td className="px-2 py-1 text-right tabular-nums text-sm font-medium">{shownTotal}</td>
             </tr>
           </tfoot>
         </table>

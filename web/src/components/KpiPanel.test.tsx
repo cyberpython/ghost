@@ -59,6 +59,7 @@ describe('KpiPanel', () => {
     const { container } = render(
       <KpiPanel byMethodStatus={cells} total={99} statWindow={'24h' as StatWindow} onStatWindow={() => {}} />)
     expect(container.textContent).toContain('total 15')
-    expect(container.textContent).not.toContain('total 99')
+    // Header and footer grand total both switch to the windowed sum.
+    expect(container.textContent).not.toContain('99')
   })
 })
