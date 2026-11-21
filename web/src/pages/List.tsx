@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router'
-import { listCaptures } from '../api'
-import type { CaptureListItem } from '../api'
+import { listCaptures, getStats } from '../api'
+import type { CaptureListItem, Stats, StatWindow } from '../api'
 import Header from '../components/Header'
 import CapturesTable from '../components/CapturesTable'
 import SelectDropdown from '../components/SelectDropdown'
+import KpiPanel from '../components/KpiPanel'
+import TimeGraph from '../components/TimeGraph'
 import { navBtn } from '../lib/navBtn'
 
 const HTTP_METHODS = ['GET','POST','PUT','DELETE','PATCH','HEAD','OPTIONS','CONNECT','TRACE']
@@ -14,25 +16,61 @@ export default function List({ auto, onAuto }: { auto: boolean; onAuto: (v: bool
   const [sp,setSp]=useSearchParams()
   const [rows,setRows]=useState<CaptureListItem[]>([])
   const [count,setCount]=useState(0)
+  const [stats,setStats]=useState<Stats|null>(null)
+  const [statsErr,setStatsErr]=useState(false)
+  // FR-033 KPI window chips: 24h / 7d / all — applied only to the stats call,
+  // never to the list's own since/until filters.
+  const [statWin,setStatWin]=useState<StatWindow>('all')
   const limit=20
   const offset=Number(sp.get('offset')||'0')
-  const load=useCallback(async()=>{
+  const filterQuery=useCallback(():{[k:string]:any}=>{
     const q:{[k:string]:any}={}
     for (const k of ['method','status','path','client_addr','since','until','error']) {
       const v=sp.get(k); if(v!==null) q[k]=v
     }
+    return q
+  },[sp])
+  const load=useCallback(async()=>{
+    const q=filterQuery()
     const r=await listCaptures({...q,limit,offset})
     setRows(r.captures); setCount(r.count)
-  },[sp,offset])
+  },[filterQuery,offset])
+  const loadStats=useCallback(async()=>{
+    try {
+      const q:{[k:string]:any}=filterQuery()
+      if (statWin!=='all') q.window=statWin
+      const s=await getStats(q)
+      setStats(s); setStatsErr(false)
+    } catch {
+      // /api/stats failing must not surface as an unhandled rejection in the
+      // 5 s poll; both panels hide and a muted note keeps the failure visible.
+      setStats(null); setStatsErr(true)
+    }
+  },[filterQuery,statWin])
   useEffect(()=>{load()},[load])
+  useEffect(()=>{loadStats()},[loadStats])
   useEffect(()=>{
     if(!auto) return
-    const t=setInterval(load,5000)
+    const t=setInterval(()=>{load();loadStats()},5000)
     return ()=>clearInterval(t)
-  },[auto,load])
+  },[auto,load,loadStats])
   const set=(k:string,v:string)=>{
     const n=new URLSearchParams(sp)
     if(v==='')n.delete(k); else n.set(k,v)
+    setSp(n,{replace:true})
+  }
+  // Span-aware click-through: the graph hands back inclusive since/until bounds
+  // for the clicked bucket (hour or day); we just apply them as list filters.
+  const onBucketClick=(since:string,until:string)=>{
+    const n=new URLSearchParams(sp)
+    n.set('since',since)
+    n.set('until',until)
+    setSp(n,{replace:true})
+  }
+  const clearFilters=()=>{
+    const n=new URLSearchParams(sp)
+    for (const k of ['method','status','path','client_addr','since','until','error']) n.delete(k)
+    n.set('offset','0')
     setSp(n,{replace:true})
   }
   const exportUrl=()=>{
@@ -88,11 +126,24 @@ export default function List({ auto, onAuto }: { auto: boolean; onAuto: (v: bool
         {(['status','path','client_addr','since','until','error'] as const).map(k=>(
           <input key={k} placeholder={k} value={sp.get(k)??''} onChange={e=>set(k,e.target.value)} className="flex-1 min-w-[8rem] border border-[var(--border)] rounded px-2 py-1 text-sm bg-transparent text-[var(--text)] placeholder-[var(--muted)]"/>
         ))}
+        <button onClick={clearFilters}
+          className="border border-[var(--border)] rounded px-2.5 py-1 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors">
+          Clear filters
+        </button>
         <a href={exportUrl()} download
           className="border border-[var(--border)] rounded px-2.5 py-1 text-sm bg-transparent text-[var(--text)] hover:border-[var(--accent)] transition-colors">
           Export HAR
         </a>
       </div>
+      {stats && (
+        <div className="flex flex-col gap-3 mb-3">
+          <KpiPanel byMethodStatus={stats.by_method_status} total={stats.total} statWindow={statWin} onStatWindow={setStatWin}/>
+          {/* key remounts the graph per chip: a pin in hour-space is meaningless
+              in day-space, so switching chips resets the navigation state. */}
+          <TimeGraph key={statWin} hourly={stats.hourly} window={statWin} onBucketClick={onBucketClick}/>
+        </div>
+      )}
+      {statsErr && <p className="muted text-sm mb-3">stats unavailable</p>}
       <CapturesTable captures={rows}/>
     </main>
   </>)
