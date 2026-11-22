@@ -240,55 +240,82 @@ fn body_view(
 
 // ── Handlers ────────────────────────────────────────────────────────────────
 
-/// Build the WHERE clause for the list filters. Shared by the JSON list
-/// endpoint, the HAR export, and `/api/stats` so all three always agree on
-/// what "the current filter set" means.
-fn where_sql(q: &ListQuery) -> String {
+/// The active filter set, built as static SQL fragments plus the values to
+/// bind for each, in order. Every user input travels as a bound parameter —
+/// there is no escaping to get wrong, replacing the former hand-escaped
+/// string building (`replace('\'', "''")` interpolated via `format!`).
+/// Shared by the JSON list endpoint, the HAR export, and `/api/stats` so all
+/// three always agree on what "the current filter set" means.
+#[derive(Clone, Default)]
+struct Filters {
+    parts: Vec<(&'static str, Vec<String>)>,
+}
+
+impl Filters {
+    fn push(&mut self, frag: &'static str, value: String) {
+        self.parts.push((frag, vec![value]));
+    }
+
+    /// The WHERE body: fragments joined with AND (`1=1` when empty), matching
+    /// the shape of the escape-built clause this replaces.
+    fn sql(&self) -> String {
+        if self.parts.is_empty() {
+            "1=1".into()
+        } else {
+            self.parts
+                .iter()
+                .map(|(frag, _)| *frag)
+                .collect::<Vec<_>>()
+                .join("\n  AND ")
+        }
+    }
+}
+
+/// Bind every filter value onto a sqlx query builder, in fragment order.
+/// `Query`/`QueryAs`/`QueryScalar` all bind identically, so this keeps the
+/// six call sites to one line each.
+macro_rules! bind_filters {
+    ($query:expr, $filters:expr) => {{
+        let mut q = $query;
+        for (_, values) in &$filters.parts {
+            for v in values {
+                q = q.bind(v.as_str());
+            }
+        }
+        q
+    }};
+}
+
+/// Build the filter set from the list filters. Same predicates and fragment
+/// order as the escape-built clause this replaces.
+fn filters(q: &ListQuery) -> Filters {
+    let mut f = Filters::default();
     // Normalize status filter: "ERR"/"err"/"error" → match NULL status_code
     let (status_raw, is_err) = normalize_status(q.status.as_deref());
-
-    // Build status filter in the correct position (2nd in WHERE clause)
-    let status_filter = if is_err {
-        "status_code IS NULL".into()
+    if let Some(m) = q.method.as_deref() {
+        f.push("instr(LOWER(request_method), ?) > 0", m.to_lowercase());
+    }
+    if is_err {
+        f.parts.push(("status_code IS NULL", vec![]));
     } else if let Some(s) = status_raw {
-        format!("status_code LIKE {} || '%'", s.replace('\'', "''"))
-    } else {
-        "1=1".into()
-    };
-
-    // Build WHERE clause with filters in the correct order matching bind order
-    let method_filter = q.method.as_deref().map(|m| {
-        let m_lower = m.to_lowercase().replace('\'', "''");
-        format!("instr(LOWER(request_method), '{}') > 0", m_lower)
-    });
-    let path_filter = q.path.as_deref().map(|p| {
-        let p_lower = p.to_lowercase().replace('\'', "''");
-        format!("instr(LOWER(upstream_path), '{}') > 0", p_lower)
-    });
-    let client_filter = q.client_addr.as_deref().map(|c| {
-        let c_lower = c.to_lowercase().replace('\'', "''");
-        format!("instr(LOWER(client_addr), '{}') > 0", c_lower)
-    });
-    let since_filter = q.since.as_deref().map(|s| format!("created_at >= '{}'", s.replace('\'', "''")));
-    let until_filter = q.until.as_deref().map(|u| format!("created_at <= '{}'", u.replace('\'', "''")));
-    let error_filter = q.error.as_deref().map(|e| {
-        let e_lower = e.to_lowercase().replace('\'', "''");
-        format!("instr(LOWER(error), '{}') > 0", e_lower)
-    });
-
-    [
-        method_filter.as_deref(),
-        Some(status_filter.as_str()),
-        path_filter.as_deref(),
-        client_filter.as_deref(),
-        since_filter.as_deref(),
-        until_filter.as_deref(),
-        error_filter.as_deref(),
-    ]
-    .iter()
-    .filter_map(|x| *x)
-    .collect::<Vec<_>>()
-    .join("\n  AND ")
+        f.push("status_code LIKE ? || '%'", s.to_string());
+    }
+    if let Some(p) = q.path.as_deref() {
+        f.push("instr(LOWER(upstream_path), ?) > 0", p.to_lowercase());
+    }
+    if let Some(c) = q.client_addr.as_deref() {
+        f.push("instr(LOWER(client_addr), ?) > 0", c.to_lowercase());
+    }
+    if let Some(s) = q.since.as_deref() {
+        f.push("created_at >= ?", s.to_string());
+    }
+    if let Some(u) = q.until.as_deref() {
+        f.push("created_at <= ?", u.to_string());
+    }
+    if let Some(e) = q.error.as_deref() {
+        f.push("instr(LOWER(error), ?) > 0", e.to_lowercase());
+    }
+    f
 }
 
 async fn list(
@@ -297,10 +324,10 @@ async fn list(
 ) -> R {
     let limit = q.limit.unwrap_or(50).min(500);
     let offset = q.offset.unwrap_or(0);
-    let where_sql = where_sql(&q);
+    let f = filters(&q);
 
-    let count_sql = format!("SELECT COUNT(*) FROM captures WHERE {}", where_sql);
-    let count: i64 = sqlx::query_scalar(&count_sql)
+    let count_sql = format!("SELECT COUNT(*) FROM captures WHERE {}", f.sql());
+    let count: i64 = bind_filters!(sqlx::query_scalar(&count_sql), &f)
         .fetch_one(&pool)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -310,10 +337,10 @@ async fn list(
          upstream_path, upstream_query, status_code, error, \
          request_body_len, request_body_truncated, response_body_len, response_body_truncated \
          FROM captures WHERE {} ORDER BY id DESC LIMIT ? OFFSET ?",
-        where_sql
+        f.sql()
     );
 
-    let rows: Vec<ListRow> = sqlx::query_as(&rows_sql)
+    let rows: Vec<ListRow> = bind_filters!(sqlx::query_as(&rows_sql), &f)
         .bind(limit as i64)
         .bind(offset as i64)
         .fetch_all(&pool)
@@ -405,13 +432,13 @@ async fn har_list(
 ) -> Result<Response, StatusCode> {
     let limit = q.limit.unwrap_or(50).min(500);
     let offset = q.offset.unwrap_or(0);
-    let where_sql = where_sql(&q);
+    let f = filters(&q);
 
     let rows_sql = format!(
         "SELECT * FROM captures WHERE {} ORDER BY id DESC LIMIT ? OFFSET ?",
-        where_sql
+        f.sql()
     );
-    let rows: Vec<CaptureRow> = sqlx::query_as(&rows_sql)
+    let rows: Vec<CaptureRow> = bind_filters!(sqlx::query_as(&rows_sql), &f)
         .bind(limit as i64)
         .bind(offset as i64)
         .fetch_all(&pool)
@@ -601,10 +628,10 @@ async fn stats(
     State(pool): State<sqlx::sqlite::SqlitePool>,
     Query(q): Query<ListQuery>,
 ) -> R {
-    let where_sql = where_sql(&q);
+    let f = filters(&q);
 
-    let total: i64 = sqlx::query_scalar(&format!(
-        "SELECT COUNT(*) FROM captures WHERE {}", where_sql))
+    let total_sql = format!("SELECT COUNT(*) FROM captures WHERE {}", f.sql());
+    let total: i64 = bind_filters!(sqlx::query_scalar(&total_sql), &f)
         .fetch_one(&pool)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -625,21 +652,34 @@ async fn stats(
         // anything else (absent, "all", garbage) → unwindowed
         _ => None,
     };
-    let mut ms_where = where_sql.clone();
-    if let Some((fmt, delta)) = &window_anchor {
-        // The anchor formats back into RFC3339-with-Z so it compares
-        // lexicographically against `created_at` exactly like the since/until
-        // filters do. strftime(…, NULL, …) yields NULL on an empty set.
-        let anchor: Option<String> = sqlx::query_scalar(&format!(
-            "SELECT strftime('{fmt}', \
-             (SELECT MAX(created_at) FROM captures WHERE {where_sql}), '{delta}')",
-            fmt = fmt, where_sql = where_sql, delta = delta))
-            .fetch_one(&pool)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        if let Some(a) = anchor {
-            ms_where.push_str(&format!("\n  AND created_at >= '{}'", a));
+    // The anchor formats back into RFC3339-with-Z so it compares
+    // lexicographically against `created_at` exactly like the since/until
+    // filters do. MAX(created_at) is NULL on an empty set, so there is
+    // nothing to shift in that case (strftime(…, NULL, …) yields NULL too).
+    let anchor: Option<String> = match &window_anchor {
+        Some((fmt, delta)) => {
+            let max_sql = format!("SELECT MAX(created_at) FROM captures WHERE {}", f.sql());
+            let latest: Option<String> = bind_filters!(sqlx::query_scalar(&max_sql), &f)
+                .fetch_one(&pool)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            match latest {
+                Some(latest) => sqlx::query_scalar("SELECT strftime(?, ?, ?)")
+                    .bind(*fmt)
+                    .bind(latest.as_str())
+                    .bind(*delta)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+                None => None,
+            }
         }
+        None => None,
+    };
+
+    let mut ms_filters = f.clone();
+    if let Some(a) = &anchor {
+        ms_filters.push("created_at >= ?", a.clone());
     }
 
     let ms_sql = format!(
@@ -653,9 +693,9 @@ async fn stats(
          FROM captures WHERE {} \
          GROUP BY request_method, status_class \
          ORDER BY request_method ASC, status_class ASC",
-        ms_where
+        ms_filters.sql()
     );
-    let ms_rows: Vec<MethodStatusRow> = sqlx::query_as(&ms_sql)
+    let ms_rows: Vec<MethodStatusRow> = bind_filters!(sqlx::query_as(&ms_sql), &ms_filters)
         .fetch_all(&pool)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -664,9 +704,9 @@ async fn stats(
         "SELECT strftime('%Y-%m-%dT%H:00:00Z', created_at) AS hour, COUNT(*) AS count \
          FROM captures WHERE {} \
          GROUP BY hour ORDER BY hour ASC",
-        where_sql
+        f.sql()
     );
-    let hourly_rows: Vec<HourlyRow> = sqlx::query_as(&hourly_sql)
+    let hourly_rows: Vec<HourlyRow> = bind_filters!(sqlx::query_as(&hourly_sql), &f)
         .fetch_all(&pool)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

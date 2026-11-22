@@ -317,6 +317,34 @@ async fn api_integration() {
         assert_eq!(ids, vec![2, 1]);
     }
 
+    // Hostile filter input (issue #38): quote/broken-SQL payloads travel as
+    // bound parameters, never interpolated into the SQL text — the value is
+    // compared as a literal string. `'` (U+0027) sorts before `2` (U+0032),
+    // so every fixture row matches `created_at >= '; DROP TABLE captures;--'.
+    {
+        let (sl, body) = get(
+            port,
+            "/api/captures?since=%27%3B%20DROP%20TABLE%20captures%3B--",
+        )
+        .await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        let j: Value = serde_json::from_str(&body).unwrap();
+        let ids: Vec<i64> = j["captures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_i64().unwrap())
+            .collect();
+        assert_eq!(ids, vec![5, 4, 3, 2, 1]);
+
+        // The payload must not have executed: the full table is still there
+        // on the next query.
+        let (sl, body) = get(port, "/api/captures").await;
+        assert!(sl.starts_with("HTTP/1.1 200"));
+        let j: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(j["captures"].as_array().unwrap().len(), 5);
+    }
+
     // Combined: method=GET&status=200 → 2 (ids 1, 5)
     {
         let (sl, body) = get(
