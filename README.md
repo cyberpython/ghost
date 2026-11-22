@@ -137,6 +137,12 @@ without blocking the proxy.
 
 A read-only API binary and a dark-mode React/TypeScript SPA browse captures.
 
+### Screenshots
+
+| Requests list | Request details |
+| --- | --- |
+| ![Requests list](screenshots/requests_list.png) | ![Request details](screenshots/request-details.png) |
+
 ```
 ghost-api --db captures.db --listen 127.0.0.1:8090 --static-dir web/dist
 ```
